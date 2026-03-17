@@ -450,14 +450,106 @@ Requires [kube-prometheus-stack](https://github.com/prometheus-community/helm-ch
 
 ## 11 — Use in workflows
 
+### Architecture Overview
+
+This repository is solely responsible for deploying and managing the ARC infrastructure. It is completely separate from your application code and production cluster:
+
+```
+arc-runner-controller repo          CI/CD Cluster (EKS)
+─────────────────────────           ───────────────────────────
+deploy-arc.yaml          ────────►  arc-system  (controller)
+arc-system/values        ────────►  arc-runners (runners)
+                                            │
+                                            │ runners execute jobs
+                                            ▼
+                                    Your other repos
+                                    (app code, PSUserOffboarding etc.)
+                                            │
+                                            │ deploy to
+                                            ▼
+                                    Production Cluster (EKS)
+                                    ─────────────────────────
+                                    Your actual app workloads
+```
+
+- **This repo** — manages the CI/CD infrastructure only
+- **Other repos** — use `runs-on: arc-runner-set` to run their pipelines on the runners this repo provisions
+- **Production cluster** — completely separate, only receives deployments from those pipelines
+
+---
+
+### Calling the ARC Runner from Another Repository
+
+Any repository under the `getdzidon` GitHub account can use these runners by simply referencing `arc-runner-set` in the `runs-on` field. The runner handles the job and then deploys to your production cluster using its own OIDC credentials.
+
+**Basic usage:**
+
 ```yaml
 jobs:
   build:
     runs-on: arc-runner-set   # matches runnerScaleSetName in arc-runner-scale-set-values.yaml
     steps:
-      - uses: actions/checkout@v4
-      - run: echo "Running on ARC for getdzidon!"
+      - uses: actions/checkout@v6
+      - run: echo "Running on ARC runner!"
 ```
+
+**Full example — Build and deploy an app to a separate production cluster:**
+
+```yaml
+# .github/workflows/deploy-app.yaml (in your APP repository, not this repo)
+name: Deploy App
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write      # required for OIDC
+
+jobs:
+  deploy:
+    runs-on: arc-runner-set   # uses the ARC runner provisioned by this repo
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Authenticate to AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE_ARN }}   # IAM role for PRODUCTION cluster
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Configure kubectl for Production Cluster
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ secrets.AWS_REGION }} \
+            --name ${{ secrets.PROD_EKS_CLUSTER_NAME }}     # your production cluster name
+
+      - name: Deploy to Production
+        run: |
+          kubectl apply -f k8s/
+          kubectl rollout status deployment/my-app -n my-app --timeout=120s
+```
+
+**Key points:**
+
+| | CI/CD Cluster | Production Cluster |
+|---|---|---|
+| What runs here | ARC runners executing jobs | Your application workloads |
+| Managed by | This repo (`arc-runner-controller`) | Your app repo pipeline |
+| Auth secret | `AWS_IAM_ROLE_ARN` (CI cluster role) | `AWS_IAM_ROLE_ARN` (prod cluster role) |
+| Secret stored in | This repo's GitHub secrets | Your app repo's GitHub secrets |
+
+> **Important:** The `AWS_IAM_ROLE_ARN` secret in your app repo must point to an IAM role that has access to the **production** cluster, not the CI/CD cluster. These are two separate IAM roles with different permissions.
+
+**Required secrets in your app repository:**
+
+| Secret | Description |
+|--------|-------------|
+| `AWS_IAM_ROLE_ARN` | IAM role ARN with access to production EKS cluster |
+| `AWS_REGION` | e.g. `eu-central-1` |
+| `PROD_EKS_CLUSTER_NAME` | Your production EKS cluster name |
 
 ---
 
