@@ -1,0 +1,6 @@
+*.pem
+*.key
+.env
+arc-system/github-app-secret.yaml
+MY_NOTES.md
+MY_NOTES.txt

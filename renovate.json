@@ -1,0 +1,24 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:base"],
+  "packageRules": [
+    {
+      "matchManagers": ["regex"],
+      "matchPackageNames": ["gha-runner-scale-set-controller", "gha-runner-scale-set"],
+      "groupName": "ARC Helm charts",
+      "automerge": false,
+      "labels": ["dependencies", "helm"]
+    }
+  ],
+  "regexManagers": [
+    {
+      "fileMatch": ["^versions\\.env$"],
+      "matchStrings": [
+        "ARC_CHART_VERSION=(?<currentValue>[\\d.]+)"
+      ],
+      "depNameTemplate": "gha-runner-scale-set-controller",
+      "datasourceTemplate": "helm",
+      "registryUrlTemplate": "https://actions.github.io/actions-runner-controller"
+    }
+  ]
+}

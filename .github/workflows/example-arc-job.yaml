@@ -1,0 +1,48 @@
+name: CI — ARC Self-Hosted Runner
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: arc-runner-set   # routed to ARC ephemeral runner
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint shell scripts
+        run: find . -name "*.sh" -exec shellcheck {} +
+
+  validate-manifests:
+    name: Validate K8s manifests
+    runs-on: arc-runner-set
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-kubectl@v3
+        with:
+          version: "v1.29.0"
+      - name: Dry-run apply all manifests
+        run: |
+          kubectl apply --dry-run=client -f arc-system/rbac.yaml
+          kubectl apply --dry-run=client -f arc-system/network-policy.yaml
+          kubectl apply --dry-run=client -f arc-system/service-monitor.yaml
+
+  validate-helm:
+    name: Helm lint & template
+    runs-on: arc-runner-set
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v3
+        with:
+          version: "v3.14.0"
+      - name: Lint controller values
+        run: |
+          helm template arc \
+            oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set-controller \
+            --values arc-system/arc-controller-values.yaml
+      - name: Lint runner scale set values
+        run: |
+          helm template arc-runner-set \
+            oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set \
+            --values arc-system/arc-runner-scale-set-values.yaml

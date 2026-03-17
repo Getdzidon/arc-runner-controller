@@ -1,0 +1,45 @@
+---
+# ServiceMonitor for the ARC controller — scraped by Prometheus Operator
+# Requires: kube-prometheus-stack or prometheus-operator installed in the cluster
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: arc-controller-metrics
+  namespace: arc-system
+  labels:
+    # Must match the Prometheus Operator's serviceMonitorSelector label
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gha-runner-scale-set-controller
+  namespaceSelector:
+    matchNames:
+      - arc-system
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+
+---
+# ServiceMonitor for the runner scale set listener
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: arc-runner-set-metrics
+  namespace: arc-runners
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: arc-runner-set
+  namespaceSelector:
+    matchNames:
+      - arc-runners
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s

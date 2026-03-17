@@ -1,0 +1,33 @@
+# Helm values for actions-runner-controller (ARC) — controller only
+# Chart: oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set-controller
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/actions/gha-runner-scale-set-controller
+  pullPolicy: IfNotPresent
+
+# GitHub App authentication is injected via a Kubernetes secret (see install.sh)
+# Secret name must match what is referenced in the runner scale-set values
+authSecret:
+  create: false          # we create it manually via install.sh
+  name: arc-github-app-secret
+
+metrics:
+  controllerManagerAddr: ":8080"
+  listenerAddr: ":8080"
+  listenerEndpoint: "/metrics"
+
+# Expose a Service so Prometheus ServiceMonitor can scrape /metrics
+serviceMonitor:
+  enabled: true
+  labels:
+    release: prometheus   # must match Prometheus Operator's serviceMonitorSelector
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
