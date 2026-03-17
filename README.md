@@ -336,10 +336,54 @@ The pipeline runs on `ubuntu-latest` (GitHub-hosted) for the initial bootstrap, 
 
 | Secret | Description |
 |--------|-------------|
-| `AWS_ACCESS_KEY_ID` | AWS credentials for EKS auth |
-| `AWS_SECRET_ACCESS_KEY` | AWS credentials for EKS auth |
+| `AWS_IAM_ROLE_ARN` | ARN of the IAM role GitHub Actions will assume via OIDC e.g. `arn:aws:iam::<ACCOUNT_ID>:role/github-actions-arc-role` |
 | `AWS_REGION` | e.g. `eu-central-1` |
 | `EKS_CLUSTER_NAME` | Your EKS cluster name |
+
+> **Note:** `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are no longer needed and should be deleted from your GitHub secrets.
+
+**Setting up the IAM role for OIDC:**
+
+Before the pipeline can run, create an IAM role that trusts GitHub's OIDC provider:
+
+```bash
+# 1. Add GitHub OIDC provider to AWS (one time per account)
+aws iam create-open-id-connect-provider \
+  --url https://token.actions.githubusercontent.com \
+  --client-id-list sts.amazonaws.com
+
+# 2. Create trust policy
+cat > /tmp/github-oidc-trust.json <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": {
+      "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com"
+    },
+    "Action": "sts:AssumeRoleWithWebIdentity",
+    "Condition": {
+      "StringEquals": {
+        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+      },
+      "StringLike": {
+        "token.actions.githubusercontent.com:sub": "repo:getdzidon/arc-runner-controller:*"
+      }
+    }
+  }]
+}
+EOF
+
+# 3. Create the role
+aws iam create-role \
+  --role-name github-actions-arc-role \
+  --assume-role-policy-document file:///tmp/github-oidc-trust.json
+
+# 4. Attach required permissions (EKS access)
+aws iam attach-role-policy \
+  --role-name github-actions-arc-role \
+  --policy-arn arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+```
 
 ---
 
