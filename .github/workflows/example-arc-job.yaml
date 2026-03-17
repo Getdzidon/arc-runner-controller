@@ -10,7 +10,7 @@ jobs:
     name: Lint
     runs-on: arc-runner-set   # routed to ARC ephemeral runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Lint shell scripts
         run: find . -name "*.sh" -exec shellcheck {} +
 
@@ -18,7 +18,7 @@ jobs:
     name: Validate K8s manifests
     runs-on: arc-runner-set
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: azure/setup-kubectl@v4
         with:
           version: "v1.29.0"
@@ -32,7 +32,7 @@ jobs:
     name: Helm lint & template
     runs-on: arc-runner-set
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: azure/setup-helm@v4
         with:
           version: "v3.14.0"
