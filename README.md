@@ -412,11 +412,26 @@ Never populate this file with real values and commit it — use one of the three
 
 ---
 
-## 9 — Automated version updates (Renovate)
+## 9 — Automated version updates (Renovate + Dependabot)
 
-`renovate.json` configures Renovate Bot to watch `versions.env` and open a PR when a new ARC chart version is released. PRs are labelled `dependencies` and `helm` and require manual approval before merge.
+This repo uses both tools together, each handling what it does best with no overlap:
+
+| Tool | What it updates | Config file |
+|------|----------------|-------------|
+| Renovate | ARC Helm chart version in `versions.env` | `renovate.json` |
+| Dependabot | GitHub Actions versions in workflow files | `.github/dependabot.yml` |
+
+### Renovate
+`renovate.json` uses a custom regex manager to watch `versions.env` and open a PR when a new ARC chart version is released. PRs are labelled `dependencies` and `helm` and require manual approval before merge.
+
+Dependabot cannot do this — it does not support custom regex matching against `.env` files, which is why Renovate handles this specifically.
 
 To enable: install the [Renovate GitHub App](https://github.com/apps/renovate) on your repository.
+
+### Dependabot
+`.github/dependabot.yml` watches all GitHub Actions used in workflow files (e.g. `actions/checkout`, `aws-actions/configure-aws-credentials`, `azure/setup-kubectl`) and opens a weekly PR when newer versions are available. PRs are labelled `dependencies` and `github-actions`.
+
+Dependabot is built into GitHub — no additional app installation required.
 
 ---
 
