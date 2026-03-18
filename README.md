@@ -139,6 +139,20 @@ helm upgrade --install sealed-secrets sealed-secrets/sealed-secrets \
 
 **Install the kubeseal CLI:**
 
+```powershell
+# Windows (winget)
+winget install bitnami.kubeseal
+
+# Windows (Chocolatey)
+choco install kubeseal
+
+# Windows (manual)
+$VERSION = "0.26.0"
+Invoke-WebRequest -Uri "https://github.com/bitnami-labs/sealed-secrets/releases/download/v$VERSION/kubeseal-$VERSION-windows-amd64.tar.gz" -OutFile kubeseal.tar.gz
+tar -xzf kubeseal.tar.gz kubeseal.exe
+Move-Item kubeseal.exe C:\Windows\System32\kubeseal.exe   # or any directory on your PATH
+```
+
 ```bash
 # macOS
 brew install kubeseal
@@ -547,7 +561,14 @@ Requires [kube-prometheus-stack](https://github.com/prometheus-community/helm-ch
 
 ## Local bootstrap (alternative to the pipeline)
 
-If you want to deploy from your local machine instead of the pipeline:
+`install.sh` is a local-only script. It is **not called by the pipeline** — `deploy-arc.yaml` runs its own Helm and kubectl commands directly.
+
+Run `install.sh` manually from your machine **instead of** pushing to `main`, for example when:
+- You want to bootstrap ARC on a cluster that is not yet reachable by GitHub Actions
+- You are testing locally before setting up the pipeline
+- You do not want to use the GitOps pipeline at all
+
+Run it after completing Steps 1–4 (GitHub App, IAM role, etc.) with your kubeconfig pointing at the target cluster:
 
 ```bash
 export GITHUB_APP_ID=<app-id>
