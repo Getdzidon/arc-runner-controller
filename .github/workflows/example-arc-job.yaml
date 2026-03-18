@@ -3,7 +3,13 @@ name: CI — ARC Self-Hosted Runner
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "README.md"
+      - "**.txt"
   pull_request:
+    paths-ignore:
+      - "README.md"
+      - "**.txt"
 
 jobs:
   lint:
