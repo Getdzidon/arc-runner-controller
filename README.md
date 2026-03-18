@@ -6,27 +6,38 @@ GitHub account: **getdzidon** — `https://github.com/getdzidon`
 
 ---
 
+## How it works
+
+```
+Manual steps (one-time)  →  push to main  →  deploy-arc.yaml runs  →  ARC is live
+```
+
+Once the manual steps below are done and the code is pushed to `main`, the `deploy-arc.yaml` pipeline fully deploys ARC automatically — no further intervention needed.
+
+---
+
 ## Project structure
 
 ```
 arc-runner-controller/
 ├── .github/
-│   └── workflows/
-│       ├── deploy-arc.yaml          # GitOps pipeline — deploys ARC itself
-│       └── example-arc-job.yaml     # CI pipeline that runs ON ARC runners
+│   ├── workflows/
+│   │   ├── deploy-arc.yaml               # GitOps pipeline — deploys ARC itself (automated)
+│   │   └── example-arc-job.yaml          # CI pipeline that runs ON ARC runners
+│   └── dependabot.yml
 ├── arc-system/
-│   ├── arc-controller-values.yaml   # Helm values for the ARC controller
+│   ├── arc-controller-values.yaml        # Helm values for the ARC controller
 │   ├── arc-runner-scale-set-values.yaml  # Helm values + autoscaling config
-│   ├── rbac.yaml                    # ServiceAccount, Role, RoleBinding
-│   ├── network-policy.yaml          # NetworkPolicies for runner isolation
-│   ├── service-monitor.yaml         # Prometheus ServiceMonitors
-│   ├── secret-store.yaml            # ESO SecretStore (Option C)
-│   ├── external-secret.yaml         # ESO ExternalSecret (Option C)
-│   └── github-app-secret.yaml.tpl   # Secret template (never commit real values)
-├── versions.env                     # Pinned chart versions (managed by Renovate)
-├── renovate.json                    # Automated dependency update config
-├── install.sh                       # Local bootstrap script
-├── .gitignore                       # Blocks .pem keys and plain secret files from Git
+│   ├── rbac.yaml                         # ServiceAccount, Role, RoleBinding
+│   ├── network-policy.yaml               # NetworkPolicies for runner isolation
+│   ├── service-monitor.yaml              # Prometheus ServiceMonitors
+│   ├── secret-store.yaml                 # ESO SecretStore (Option C only)
+│   ├── external-secret.yaml              # ESO ExternalSecret (Option C only)
+│   └── github-app-secret.yaml.tpl        # Secret shape reference — never commit real values
+├── versions.env                          # Pinned chart versions (updated by Renovate)
+├── renovate.json                         # Automated dependency update config
+├── install.sh                            # Local bootstrap script (alternative to the pipeline)
+├── .gitignore
 └── README.md
 ```
 
@@ -39,20 +50,17 @@ arc-runner-controller/
 | kubectl | ≥ 1.26 | [docs](https://kubernetes.io/docs/tasks/tools/) |
 | helm | ≥ 3.12 | [docs](https://helm.sh/docs/intro/install/) |
 | Kubernetes cluster | ≥ 1.26 | e.g. EKS, GKE, AKS, kind |
-| aws cli | ≥ 2.x | [docs](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html) — only needed for Option C |
-
-Confirm your cluster connection before starting:
-
-```bash
-kubectl cluster-info
-kubectl get nodes
-```
+| aws cli | ≥ 2.x | [docs](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html) |
 
 ---
 
-## 1 — Create a GitHub App
+## ⚠️ Manual steps — do these first, in order
 
-### 1.1 Create the App
+These steps cannot be automated. Complete all of them before pushing to `main`.
+
+---
+
+### Step 1 — Create a GitHub App
 
 1. Go to **GitHub → Settings → Developer settings → GitHub Apps → New GitHub App**
 2. Fill in:
@@ -66,14 +74,14 @@ kubectl get nodes
    - `Metadata` → Read-only
 4. Under **Where can this GitHub App be installed?** select *Only on this account*
 5. Click **Create GitHub App**
-6. On the next page, note the **App ID** (shown at the top)
+6. Note the **App ID** shown at the top of the next page
 
-### 1.2 Generate a private key
+**Generate a private key:**
 
 1. Scroll down to **Private keys** → click **Generate a private key**
-2. A `.pem` file downloads automatically — keep it safe, you cannot re-download it
+2. A `.pem` file downloads — keep it safe, you cannot re-download it
 
-### 1.3 Install the App and get the Installation ID
+**Install the App and get the Installation ID:**
 
 1. In the left sidebar click **Install App** → click **Install** next to your account
 2. Choose *All repositories* or select specific repos → click **Install**
@@ -81,25 +89,26 @@ kubectl get nodes
    `https://github.com/settings/installations/<INSTALLATION_ID>`
 4. Note the number at the end — that is your **Installation ID**
 
+You now have three values you will need in the steps below:
+- `APP_ID`
+- `INSTALLATION_ID`
+- `/path/to/private-key.pem`
+
 ---
 
-## 2 — Storing Kubernetes Secrets
+### Step 2 — Create the Kubernetes secret
 
-ARC reads GitHub App credentials from a Kubernetes secret named `arc-github-app-secret` in the `arc-runners` namespace.
-
-First, create the namespace (required for all options):
-
-```bash
-kubectl create namespace arc-runners
-```
+The deploy pipeline assumes `arc-github-app-secret` already exists in the `arc-runners` namespace. It does not create it. You must create it once before the first deploy.
 
 Choose one option:
 
 ---
 
-### Option A — kubectl (quick, local dev)
+#### Option A — kubectl (quick, local dev)
 
 ```bash
+kubectl create namespace arc-runners
+
 kubectl create secret generic arc-github-app-secret \
   --namespace arc-runners \
   --from-literal=github_app_id=<APP_ID> \
@@ -111,14 +120,11 @@ Verify:
 
 ```bash
 kubectl get secret arc-github-app-secret -n arc-runners
-kubectl describe secret arc-github-app-secret -n arc-runners
 ```
-
-> Skip to [Section 3](#3--install-arc) — `install.sh` will not re-create the secret if it already exists.
 
 ---
 
-### Option B — Sealed Secrets (GitOps-safe, recommended for teams)
+#### Option B — Sealed Secrets (GitOps-safe, recommended for teams)
 
 Sealed Secrets encrypts the secret so it is safe to commit to Git.
 
@@ -144,10 +150,12 @@ tar -xvzf kubeseal-*.tar.gz kubeseal
 sudo mv kubeseal /usr/local/bin/
 ```
 
-**Seal and apply the secret:**
+**Seal and apply:**
 
 ```bash
-# 1. Generate a plain secret manifest — DO NOT commit this file
+kubectl create namespace arc-runners
+
+# Generate plain secret — DO NOT commit this file
 kubectl create secret generic arc-github-app-secret \
   --namespace arc-runners \
   --from-literal=github_app_id=<APP_ID> \
@@ -155,26 +163,24 @@ kubectl create secret generic arc-github-app-secret \
   --from-file=github_app_private_key=/path/to/private-key.pem \
   --dry-run=client -o yaml > /tmp/arc-secret.yaml
 
-# 2. Encrypt into a SealedSecret — this file IS safe to commit
+# Encrypt — this file IS safe to commit
 kubeseal --format yaml < /tmp/arc-secret.yaml > arc-system/arc-github-app-sealed-secret.yaml
 
-# 3. Apply it
+# Apply and clean up
 kubectl apply -f arc-system/arc-github-app-sealed-secret.yaml
-
-# 4. Remove the plain secret immediately
 rm /tmp/arc-secret.yaml
 
-# 5. Verify the controller decrypted it into a real secret
+# Verify the controller decrypted it
 kubectl get secret arc-github-app-secret -n arc-runners
 ```
 
 ---
 
-### Option C — External Secrets Operator + AWS Secrets Manager (production)
+#### Option C — External Secrets Operator + AWS Secrets Manager (production)
 
 Secrets live in AWS Secrets Manager; ESO syncs them into Kubernetes automatically.
 
-**Step 1 — Store the secret in AWS:**
+**Store the secret in AWS:**
 
 ```bash
 PEM_CONTENT=$(awk 'NF {sub(/\r/, ""); printf "%s\\n",$0;}' /path/to/private-key.pem)
@@ -189,7 +195,7 @@ aws secretsmanager create-secret \
   }"
 ```
 
-**Step 2 — Create an IAM role for ESO (IRSA):**
+**Create an IAM role for ESO (IRSA):**
 
 ```bash
 # Get your cluster OIDC issuer
@@ -237,7 +243,7 @@ aws iam attach-role-policy --role-name ESO-ARC-Role \
   --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/ESO-ARC-SecretsPolicy
 ```
 
-**Step 3 — Install ESO:**
+**Install ESO:**
 
 ```bash
 helm repo add external-secrets https://charts.external-secrets.io
@@ -248,103 +254,22 @@ helm upgrade --install external-secrets external-secrets/external-secrets \
   --wait
 ```
 
-**Step 4 — Apply the SecretStore and ExternalSecret:**
+**Apply the SecretStore and ExternalSecret:**
 
 ```bash
 kubectl apply -f arc-system/secret-store.yaml
 kubectl apply -f arc-system/external-secret.yaml
 
-# Verify sync — STATUS should show SecretSynced
+# Verify — STATUS should show SecretSynced
 kubectl get externalsecret arc-github-app-secret -n arc-runners
 kubectl get secret arc-github-app-secret -n arc-runners
 ```
 
-If STATUS shows `SecretSyncedError`:
-
-```bash
-kubectl describe externalsecret arc-github-app-secret -n arc-runners
-```
-
 ---
 
-## 3 — RBAC
+### Step 3 — Create the IAM role for GitHub Actions OIDC
 
-Runner pods use a dedicated least-privilege ServiceAccount (`arc-runner-sa`) defined in `arc-system/rbac.yaml`. The Role grants only what ARC needs to manage ephemeral job pods:
-
-| Resource | Verbs |
-|----------|-------|
-| pods | get, list, watch, create, delete |
-| pods/log | get, list, watch |
-| secrets | get, list |
-| jobs (batch) | get, list, watch, create, delete |
-
-`install.sh` and the `deploy-arc.yaml` workflow both apply this before installing Helm charts.
-
----
-
-## 4 — Network isolation
-
-`arc-system/network-policy.yaml` applies four policies to the `arc-runners` namespace:
-
-| Policy | Effect |
-|--------|--------|
-| `arc-runners-deny-ingress` | Blocks all inbound traffic to runner pods by default |
-| `arc-runners-allow-dns` | Allows UDP/TCP port 53 for DNS resolution |
-| `arc-runners-allow-egress-https` | Allows outbound HTTPS (443) only — for GitHub API and registries |
-| `arc-runners-allow-controller` | Allows inbound traffic from `arc-system` namespace only |
-
-The `arc-system` namespace is labelled `kubernetes.io/metadata.name=arc-system` by `install.sh` so the namespaceSelector works correctly.
-
----
-
-## 5 — Install ARC
-
-```bash
-export GITHUB_APP_ID=<app-id>
-export GITHUB_APP_INSTALLATION_ID=<installation-id>
-export GITHUB_APP_PRIVATE_KEY_PATH=/path/to/private-key.pem
-# GITHUB_CONFIG_URL defaults to https://github.com/getdzidon
-
-chmod +x install.sh
-./install.sh
-```
-
-The script will, in order:
-1. Source `versions.env` for the pinned chart version
-2. Create `arc-system` and `arc-runners` namespaces
-3. Label `arc-system` for NetworkPolicy selectors
-4. Apply RBAC (`rbac.yaml`)
-5. Apply NetworkPolicies (`network-policy.yaml`)
-6. Create the GitHub App secret
-7. Install the ARC controller via Helm
-8. Install the runner scale set via Helm
-9. Apply ServiceMonitors if Prometheus Operator is present
-
----
-
-## 6 — GitOps deploy pipeline
-
-`.github/workflows/deploy-arc.yaml` automatically redeploys ARC when any of these change:
-
-- `arc-system/**` — any manifest or values file
-- `versions.env` — chart version bump (triggered by Renovate)
-- `install.sh`
-
-The pipeline runs on `ubuntu-latest` (GitHub-hosted) for the initial bootstrap, then subsequent runs can be switched to `arc-runner-set` once ARC is up.
-
-**Required GitHub Actions secrets:**
-
-| Secret | Description |
-|--------|-------------|
-| `AWS_IAM_ROLE_ARN` | ARN of the IAM role GitHub Actions will assume via OIDC e.g. `arn:aws:iam::<ACCOUNT_ID>:role/github-actions-arc-role` |
-| `AWS_REGION` | e.g. `eu-central-1` |
-| `EKS_CLUSTER_NAME` | Your EKS cluster name |
-
-> **Note:** `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are no longer needed and should be deleted from your GitHub secrets.
-
-**Setting up the IAM role for OIDC:**
-
-Before the pipeline can run, create an IAM role that trusts GitHub's OIDC provider:
+The deploy pipeline authenticates to AWS via OIDC — no static credentials. This role must exist before the pipeline can run.
 
 ```bash
 # 1. Add GitHub OIDC provider to AWS (one time per account)
@@ -379,80 +304,78 @@ aws iam create-role \
   --role-name github-actions-arc-role \
   --assume-role-policy-document file:///tmp/github-oidc-trust.json
 
-# 4. Attach required permissions (EKS access)
+# 4. Attach EKS access
 aws iam attach-role-policy \
   --role-name github-actions-arc-role \
   --policy-arn arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
 ```
 
----
-
-## 7 — Secret template (github-app-secret.yaml.tpl)
-
-`arc-system/github-app-secret.yaml.tpl` is a reference template showing the exact shape of the `arc-github-app-secret` Kubernetes secret that ARC expects. It contains placeholder values only and is never applied directly.
-
-Use it to:
-- Understand which fields `install.sh` and the three secret options in Section 2 are creating
-- Manually construct the secret in environments where neither `kubectl` nor ESO is available
-
-Never populate this file with real values and commit it — use one of the three options in Section 2 instead.
+Note the role ARN — you need it in the next step.
 
 ---
 
-## 8 — .gitignore
+### Step 4 — Set GitHub Actions secrets
 
-`.gitignore` prevents sensitive files from being accidentally committed:
+Go to **GitHub → your repo → Settings → Secrets and variables → Actions → New repository secret** and add:
 
-| Pattern | What it blocks |
-|---------|----------------|
-| `*.pem` | GitHub App private key files |
-| `*.key` | Any raw key files |
-| `.env` | Local environment variable files |
-| `arc-system/github-app-secret.yaml` | Plain (unencrypted) secret manifests |
+| Secret | Value |
+|--------|-------|
+| `AWS_IAM_ROLE_ARN` | ARN of the role created in Step 3, e.g. `arn:aws:iam::<ACCOUNT_ID>:role/github-actions-arc-role` |
+| `AWS_REGION` | e.g. `eu-central-1` |
+| `EKS_CLUSTER_NAME` | Your EKS cluster name |
 
----
-
-## 9 — Automated version updates (Renovate + Dependabot)
-
-This repo uses both tools together, each handling what it does best with no overlap:
-
-| Tool | What it updates | Config file |
-|------|----------------|-------------|
-| Renovate | ARC Helm chart version in `versions.env` | `renovate.json` |
-| Dependabot | GitHub Actions versions in workflow files | `.github/dependabot.yml` |
-
-### Renovate
-`renovate.json` uses a custom regex manager to watch `versions.env` and open a PR when a new ARC chart version is released. PRs are labelled `dependencies` and `helm` and require manual approval before merge.
-
-Dependabot cannot do this — it does not support custom regex matching against `.env` files, which is why Renovate handles this specifically.
-
-To enable: install the [Renovate GitHub App](https://github.com/apps/renovate) on your repository.
-
-### Dependabot
-`.github/dependabot.yml` watches all GitHub Actions used in workflow files (e.g. `actions/checkout`, `aws-actions/configure-aws-credentials`, `azure/setup-kubectl`) and opens a weekly PR when newer versions are available. PRs are labelled `dependencies` and `github-actions`.
-
-Dependabot is built into GitHub — no additional app installation required.
+> Do not add `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` — OIDC is used instead.
 
 ---
 
-## 10 — Observability
+### Step 5 — Install the Renovate GitHub App (optional but recommended)
 
-`arc-system/service-monitor.yaml` defines two Prometheus ServiceMonitors:
+Renovate automatically opens PRs when a new ARC chart version is released, which then triggers the deploy pipeline.
 
-| Monitor | Namespace | What it scrapes |
-|---------|-----------|-----------------|
-| `arc-controller-metrics` | arc-system | ARC controller `/metrics` every 30s |
-| `arc-runner-set-metrics` | arc-runners | Runner scale set listener `/metrics` every 30s |
+1. Go to [github.com/apps/renovate](https://github.com/apps/renovate)
+2. Click **Install** and grant access to this repository
 
-Requires [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) or standalone Prometheus Operator. The `release: prometheus` label must match your Prometheus Operator's `serviceMonitorSelector`.
+Dependabot (for GitHub Actions version updates) is built into GitHub and requires no installation.
 
 ---
 
-## 11 — Use in workflows
+## ✅ What happens automatically after you push to main
 
-### Architecture Overview
+Once all manual steps above are complete, push to `main`. The `deploy-arc.yaml` pipeline runs and does the following without any further input:
 
-This repository is solely responsible for deploying and managing the ARC infrastructure. It is completely separate from your application code and production cluster:
+1. Checks out the repo
+2. Loads the pinned chart version from `versions.env`
+3. Authenticates to AWS via OIDC (using the role from Step 3)
+4. Configures kubectl against your EKS cluster
+5. Applies RBAC (`arc-system/rbac.yaml`)
+6. Applies NetworkPolicies (`arc-system/network-policy.yaml`)
+7. Installs the ARC controller via Helm
+8. Installs the runner scale set via Helm
+9. Applies ServiceMonitors (`arc-system/service-monitor.yaml`)
+10. Verifies the rollout
+
+The pipeline re-runs automatically on any future push that changes `arc-system/**`, `versions.env`, `install.sh`, or the workflow file itself.
+
+**Version updates are also automated:**
+- Renovate opens a PR when a new ARC chart version is released → merge the PR → pipeline deploys the new version
+- Dependabot opens weekly PRs for GitHub Actions version bumps in workflow files
+
+---
+
+## Verify installation
+
+```bash
+kubectl get pods -n arc-system                        # controller
+kubectl get autoscalingrunnerset -n arc-runners       # scale set
+kubectl get pods -n arc-runners                       # runner pods (appear when jobs queue)
+kubectl get servicemonitor -n arc-system              # Prometheus monitors
+kubectl get networkpolicy -n arc-runners              # network policies
+kubectl get rolebinding -n arc-runners                # RBAC
+```
+
+---
+
+## Architecture overview
 
 ```
 arc-runner-controller repo          CI/CD Cluster (EKS)
@@ -463,7 +386,7 @@ arc-system/values        ────────►  arc-runners (runners)
                                             │ runners execute jobs
                                             ▼
                                     Your other repos
-                                    (app code, PSUserOffboarding etc.)
+                                    (app code, etc.)
                                             │
                                             │ deploy to
                                             ▼
@@ -472,17 +395,15 @@ arc-system/values        ────────►  arc-runners (runners)
                                     Your actual app workloads
 ```
 
-- **This repo** — manages the CI/CD infrastructure only
-- **Other repos** — use `runs-on: arc-runner-set` to run their pipelines on the runners this repo provisions
+- **This repo** — manages CI/CD infrastructure only
+- **Other repos** — use `runs-on: arc-runner-set` to run their pipelines on these runners
 - **Production cluster** — completely separate, only receives deployments from those pipelines
 
 ---
 
-### Calling the ARC Runner from Another Repository
+## Using ARC runners in other repositories
 
-Any repository under the `getdzidon` GitHub account can use these runners by simply referencing `arc-runner-set` in the `runs-on` field. The runner handles the job and then deploys to your production cluster using its own OIDC credentials.
-
-**Basic usage:**
+Any repository under `getdzidon` can use these runners:
 
 ```yaml
 jobs:
@@ -493,10 +414,10 @@ jobs:
       - run: echo "Running on ARC runner!"
 ```
 
-**Full example — Build and deploy an app to a separate production cluster:**
+Full deploy example (in your app repo, not this repo):
 
 ```yaml
-# .github/workflows/deploy-app.yaml (in your APP repository, not this repo)
+# .github/workflows/deploy-app.yaml
 name: Deploy App
 
 on:
@@ -505,11 +426,11 @@ on:
 
 permissions:
   contents: read
-  id-token: write      # required for OIDC
+  id-token: write
 
 jobs:
   deploy:
-    runs-on: arc-runner-set   # uses the ARC runner provisioned by this repo
+    runs-on: arc-runner-set
 
     steps:
       - uses: actions/checkout@v6
@@ -524,7 +445,7 @@ jobs:
         run: |
           aws eks update-kubeconfig \
             --region ${{ secrets.AWS_REGION }} \
-            --name ${{ secrets.PROD_EKS_CLUSTER_NAME }}     # your production cluster name
+            --name ${{ secrets.PROD_EKS_CLUSTER_NAME }}
 
       - name: Deploy to Production
         run: |
@@ -532,28 +453,17 @@ jobs:
           kubectl rollout status deployment/my-app -n my-app --timeout=120s
 ```
 
-**Key points:**
-
-| | CI/CD Cluster | Production Cluster |
-|---|---|---|
-| What runs here | ARC runners executing jobs | Your application workloads |
-| Managed by | This repo (`arc-runner-controller`) | Your app repo pipeline |
-| Auth secret | `AWS_IAM_ROLE_ARN` (CI cluster role) | `AWS_IAM_ROLE_ARN` (prod cluster role) |
-| Secret stored in | This repo's GitHub secrets | Your app repo's GitHub secrets |
-
-> **Important:** The `AWS_IAM_ROLE_ARN` secret in your app repo must point to an IAM role that has access to the **production** cluster, not the CI/CD cluster. These are two separate IAM roles with different permissions.
-
-**Required secrets in your app repository:**
+Required secrets in your app repo:
 
 | Secret | Description |
 |--------|-------------|
-| `AWS_IAM_ROLE_ARN` | IAM role ARN with access to production EKS cluster |
+| `AWS_IAM_ROLE_ARN` | IAM role with access to the **production** EKS cluster (different from the CI role) |
 | `AWS_REGION` | e.g. `eu-central-1` |
-| `PROD_EKS_CLUSTER_NAME` | Your production EKS cluster name |
+| `PROD_EKS_CLUSTER_NAME` | Your production cluster name |
 
 ---
 
-## Autoscaling behaviour
+## Autoscaling
 
 | Setting | Value | Description |
 |---------|-------|-------------|
@@ -562,7 +472,7 @@ jobs:
 | Scale trigger | Queued jobs | ARC scales up when jobs are waiting |
 | Runner lifecycle | Ephemeral | Pod is destroyed after each job |
 
-To change limits, edit `arc-system/arc-runner-scale-set-values.yaml` and push to `main` — the deploy pipeline will apply the change automatically.
+To change limits, edit `arc-system/arc-runner-scale-set-values.yaml` and push to `main`.
 
 ---
 
@@ -579,15 +489,73 @@ Edit `storageClassName` in `arc-system/arc-runner-scale-set-values.yaml`:
 
 ---
 
-## Verify installation
+## RBAC
+
+Runner pods use a dedicated least-privilege ServiceAccount (`arc-runner-sa`) defined in `arc-system/rbac.yaml`:
+
+| Resource | Verbs |
+|----------|-------|
+| pods | get, list, watch, create, delete |
+| pods/log | get, list, watch |
+| secrets | get, list |
+| jobs (batch) | get, list, watch, create, delete |
+
+---
+
+## Network isolation
+
+`arc-system/network-policy.yaml` applies four policies to the `arc-runners` namespace:
+
+| Policy | Effect |
+|--------|--------|
+| `arc-runners-deny-ingress` | Blocks all inbound traffic to runner pods by default |
+| `arc-runners-allow-dns` | Allows UDP/TCP port 53 for DNS resolution |
+| `arc-runners-allow-egress-https` | Allows outbound HTTPS (443) only |
+| `arc-runners-allow-controller` | Allows inbound traffic from `arc-system` namespace only |
+
+---
+
+## Observability
+
+`arc-system/service-monitor.yaml` defines two Prometheus ServiceMonitors:
+
+| Monitor | Namespace | What it scrapes |
+|---------|-----------|-----------------|
+| `arc-controller-metrics` | arc-system | ARC controller `/metrics` every 30s |
+| `arc-runner-set-metrics` | arc-runners | Runner scale set listener `/metrics` every 30s |
+
+Requires [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) or standalone Prometheus Operator. The `release: prometheus` label must match your Prometheus Operator's `serviceMonitorSelector`.
+
+---
+
+## Secret template reference
+
+`arc-system/github-app-secret.yaml.tpl` shows the exact shape of the `arc-github-app-secret` Kubernetes secret that ARC expects. It contains placeholder values only and is never applied directly. Never populate it with real values.
+
+---
+
+## .gitignore
+
+| Pattern | What it blocks |
+|---------|----------------|
+| `*.pem` | GitHub App private key files |
+| `*.key` | Any raw key files |
+| `.env` | Local environment variable files |
+| `arc-system/github-app-secret.yaml` | Plain (unencrypted) secret manifests |
+
+---
+
+## Local bootstrap (alternative to the pipeline)
+
+If you want to deploy from your local machine instead of the pipeline:
 
 ```bash
-kubectl get pods -n arc-system                        # controller
-kubectl get autoscalingrunnerset -n arc-runners       # scale set
-kubectl get pods -n arc-runners                       # runner pods (appear when jobs queue)
-kubectl get servicemonitor -n arc-system              # Prometheus monitors
-kubectl get networkpolicy -n arc-runners              # network policies
-kubectl get rolebinding -n arc-runners                # RBAC
+export GITHUB_APP_ID=<app-id>
+export GITHUB_APP_INSTALLATION_ID=<installation-id>
+export GITHUB_APP_PRIVATE_KEY_PATH=/path/to/private-key.pem
+
+chmod +x install.sh
+./install.sh
 ```
 
 ---
@@ -616,7 +584,7 @@ The secret must be in `arc-runners`, not `arc-system`.
 ```bash
 kubectl describe networkpolicy -n arc-runners
 ```
-Ensure the `arc-system` namespace has the label `kubernetes.io/metadata.name=arc-system` (applied by `install.sh`).
+Ensure the `arc-system` namespace has the label `kubernetes.io/metadata.name=arc-system`.
 
 **Helm OCI pull fails**
 ```bash
@@ -628,7 +596,7 @@ Requires a GitHub PAT with `read:packages` scope.
 ```bash
 kubectl get servicemonitor -n arc-system -o yaml
 ```
-Ensure the `release: prometheus` label matches your Prometheus Operator's `serviceMonitorSelector` value.
+Ensure the `release: prometheus` label matches your Prometheus Operator's `serviceMonitorSelector`.
 
 ---
 
