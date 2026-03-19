@@ -4,11 +4,11 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 6.37"
     }
     helm = {
       source  = "hashicorp/helm"
-      version = "~> 2.12"
+      version = "~> 3.1"
     }
     kubectl = {
       source  = "gavinbunney/kubectl"
@@ -65,7 +65,7 @@ provider "kubectl" {
 # ── VPC ───────────────────────────────────────────────────────────────────────
 module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
-  version = "~> 5.0"
+  version = "~> 6.6"
 
   name = "${var.cluster_name}-vpc"
   cidr = "10.0.0.0/16"
@@ -89,7 +89,7 @@ module "vpc" {
 # ── EKS cluster ───────────────────────────────────────────────────────────────
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 20.0"
+  version = "~> 21.15"
 
   cluster_name    = var.cluster_name
   cluster_version = "1.29"
