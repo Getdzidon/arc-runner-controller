@@ -13,6 +13,7 @@ resource "helm_release" "eso" {
     }
   ]
 
+  # Wait for cluster + nodes to be healthy before installing
   depends_on = [module.eks]
 }
 

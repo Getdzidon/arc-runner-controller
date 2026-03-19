@@ -64,7 +64,7 @@ arc-runner-controller/
 | aws cli | ≥ 2.x | [docs](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html) |
 | terraform | ≥ 1.6 | [docs](https://developer.hashicorp.com/terraform/install) — only needed for Option D |
 
-> **Kubernetes cluster:** ARC requires a running Kubernetes cluster. If you do not have one, use **Option D** in Step 3 — it provisions an EKS cluster via Terraform as part of the setup. If you already have a cluster (EKS, GKE, AKS, or kind), skip Option D and proceed with Options A, B, or C.
+> **Kubernetes cluster:** ARC requires a running Kubernetes cluster. If you do not have one, Step 3 includes instructions to create one manually via the AWS CLI, or you can use **Option D** to provision everything via Terraform.
 
 ---
 
@@ -159,11 +159,76 @@ Note the role ARN — you need it in Step 4.
 
 ---
 
-### 🟡 Step 3 — Create the Kubernetes secret
+### 🟡 Step 3 — Provision the cluster and create the Kubernetes secret
 
-The deploy pipeline assumes `arc-github-app-secret` already exists in the `arc-runners` namespace. It does not create it. You must create it once before the first deploy.
+The deploy pipeline assumes a running Kubernetes cluster with `arc-github-app-secret` already in the `arc-runners` namespace. It does not create either. You must set them up once before the first deploy.
 
-Choose one option:
+**If you already have a Kubernetes cluster**, skip straight to the option that suits you (A, B, or C).
+
+**If you do not have a cluster yet**, either:
+- Create one manually using the instructions below, then use Option A, B, or C for the secret
+- Or use **Option D** which provisions the cluster AND the secret via Terraform in one shot
+
+---
+
+#### 🟡 Create an EKS cluster manually (skip if you already have one, or if using Option D)
+
+```bash
+# 1. Create a VPC (or use an existing one)
+#    You need at least 2 private subnets in different AZs for EKS.
+#    The easiest way is via the AWS Console:
+#    VPC → Create VPC → "VPC and more" → 2 AZs, 2 private + 2 public subnets, 1 NAT gateway
+
+# 2. Create the EKS cluster
+aws eks create-cluster \
+  --name arc-ci-cluster \
+  --region eu-central-1 \
+  --kubernetes-version 1.33 \
+  --role-arn arn:aws:iam::<ACCOUNT_ID>:role/<EKS_CLUSTER_ROLE> \
+  --resources-vpc-config subnetIds=<PRIVATE_SUBNET_1>,<PRIVATE_SUBNET_2>,endpointPublicAccess=true
+
+# Wait for the cluster to become ACTIVE (~10 min)
+aws eks wait cluster-active --name arc-ci-cluster --region eu-central-1
+
+# 3. Create a node IAM role
+aws iam create-role --role-name arc-ci-cluster-node-group \
+  --assume-role-policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Principal": { "Service": "ec2.amazonaws.com" },
+      "Action": "sts:AssumeRole"
+    }]
+  }'
+
+aws iam attach-role-policy --role-name arc-ci-cluster-node-group \
+  --policy-arn arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+aws iam attach-role-policy --role-name arc-ci-cluster-node-group \
+  --policy-arn arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+aws iam attach-role-policy --role-name arc-ci-cluster-node-group \
+  --policy-arn arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+
+# 4. Create a managed node group
+aws eks create-nodegroup \
+  --cluster-name arc-ci-cluster \
+  --nodegroup-name default \
+  --node-role arn:aws:iam::<ACCOUNT_ID>:role/arc-ci-cluster-node-group \
+  --subnets <PRIVATE_SUBNET_1> <PRIVATE_SUBNET_2> \
+  --instance-types t3.medium \
+  --scaling-config minSize=1,maxSize=3,desiredSize=2 \
+  --region eu-central-1
+
+# Wait for the node group to become ACTIVE (~15-25 min)
+aws eks wait nodegroup-active \
+  --cluster-name arc-ci-cluster --nodegroup-name default --region eu-central-1
+
+# 5. Configure kubectl
+aws eks update-kubeconfig --name arc-ci-cluster --region eu-central-1
+```
+
+> **Note:** The `<EKS_CLUSTER_ROLE>` is a separate IAM role that EKS assumes to manage the cluster. If you don't have one, create it with the `AmazonEKSClusterPolicy` attached and a trust policy for `eks.amazonaws.com`. See the [EKS docs](https://docs.aws.amazon.com/eks/latest/userguide/service_IAM_role.html).
+
+Once the cluster is running, choose one of the options below to create the secret.
 
 ---
 
@@ -346,7 +411,7 @@ kubectl get secret arc-github-app-secret -n arc-runners
 
 #### 🟡 Option D — Terraform (provisions everything: EKS cluster + IAM + secrets + ESO)
 
-Use this option if you do not have an existing Kubernetes cluster, or if you want all AWS infrastructure managed as code. Requires Step 2 (OIDC provider) to be completed first.
+Use this option if you want all AWS infrastructure managed as code. Requires Step 2 (OIDC provider) to be completed first. Skip the manual cluster creation above — Terraform handles it.
 
 Terraform will create:
 - VPC with public and private subnets
