@@ -90,7 +90,7 @@ module "vpc" {
 # ── EKS cluster ───────────────────────────────────────────────────────────────
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 21.15"
+  version = "21.15.0" # pin exact version
 
   cluster_name    = var.cluster_name
   cluster_version = "1.29"
@@ -100,16 +100,32 @@ module "eks" {
 
   cluster_endpoint_public_access = true
 
+  enable_cluster_creator_admin_permissions = true
+
   eks_managed_node_groups = {
     default = {
+      name = "default"
+
       instance_types = [var.node_instance_type]
-      min_size       = 1
-      max_size       = 3
-      desired_size   = 2
+
+      min_size     = 1
+      max_size     = 3
+      desired_size = 2
+
+      # avoids some EKS upgrade/recreate issues later
+      ami_type = "AL2_x86_64"
+
+      # ensures nodes can join cluster properly
+      iam_role_additional_policies = {
+        AmazonSSMManagedInstanceCore = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+      }
     }
   }
 
-  enable_cluster_creator_admin_permissions = true
+  tags = {
+    Environment = "dev"
+    Terraform   = "true"
+  }
 }
 
 # ── OIDC provider for EKS (used by ESO IRSA) ─────────────────────────────────
