@@ -74,7 +74,7 @@ Complete all of them before pushing to `main`.
 
 ---
 
-### Step 1 — Create a GitHub App
+### 🔵 Step 1 — Create a GitHub App
 
 1. Go to **GitHub → Settings → Developer settings → GitHub Apps → New GitHub App**
 2. Fill in:
@@ -110,11 +110,11 @@ You now have three values you will need in the steps below:
 
 ---
 
-### Step 2 — Create the GitHub Actions OIDC provider and IAM role
+### 🟢 Step 2 — Create the GitHub Actions OIDC provider and IAM role
 
 The deploy pipelines authenticate to AWS via OIDC — no static credentials. The OIDC provider must exist in your AWS account before anything else can run — both the `deploy-arc.yaml` pipeline and Terraform (Option D) depend on it.
 
-> ⚠️ **This step is required for all options including Option D.** Terraform references the existing OIDC provider via a data source — it does not create it.
+> ⚠️ **Step 2 is required regardless of which option you choose in Step 3.** Options A, B, and C do not use OIDC directly, but the deploy pipelines (`deploy-arc.yaml` and `deploy-terraform.yaml`) authenticate to AWS via this OIDC role. Option D additionally requires the OIDC provider to exist because Terraform references it via a `data` source.
 
 ```bash
 # 1. Add GitHub OIDC provider to AWS (one time per account)
@@ -159,7 +159,7 @@ Note the role ARN — you need it in Step 4.
 
 ---
 
-### Step 3 — Create the Kubernetes secret
+### 🟡 Step 3 — Create the Kubernetes secret
 
 The deploy pipeline assumes `arc-github-app-secret` already exists in the `arc-runners` namespace. It does not create it. You must create it once before the first deploy.
 
@@ -167,7 +167,7 @@ Choose one option:
 
 ---
 
-#### `Option A` — kubectl (quick, local dev)
+#### 🟡 Option A — kubectl (quick, local dev)
 
 ```bash
 kubectl create namespace arc-runners
@@ -187,7 +187,7 @@ kubectl get secret arc-github-app-secret -n arc-runners
 
 ---
 
-#### `Option B` — Sealed Secrets (GitOps-safe, recommended for teams)
+#### 🟡 Option B — Sealed Secrets (GitOps-safe, recommended for teams)
 
 Sealed Secrets encrypts the secret so it is safe to commit to Git.
 
@@ -253,7 +253,7 @@ kubectl get secret arc-github-app-secret -n arc-runners
 
 ---
 
-#### `Option C` — External Secrets Operator + AWS Secrets Manager (production)
+#### 🟡 Option C — External Secrets Operator + AWS Secrets Manager (production)
 
 Secrets live in AWS Secrets Manager; ESO syncs them into Kubernetes automatically.
 
@@ -344,13 +344,13 @@ kubectl get secret arc-github-app-secret -n arc-runners
 
 ---
 
-#### `Option D` — Terraform (provisions everything: EKS cluster + IAM + secrets + ESO)
+#### 🟡 Option D — Terraform (provisions everything: EKS cluster + IAM + secrets + ESO)
 
 Use this option if you do not have an existing Kubernetes cluster, or if you want all AWS infrastructure managed as code. Requires Step 2 (OIDC provider) to be completed first.
 
 Terraform will create:
 - VPC with public and private subnets
-- EKS cluster (Kubernetes 1.34, t3.medium nodes)
+- EKS cluster (Kubernetes 1.32, t3.medium nodes)
 - EKS OIDC provider and IAM role for ESO (`ESO-ARC-Role`)
 - AWS Secrets Manager secret (`arc/github-app`) with your GitHub App credentials
 - External Secrets Operator installed via Helm
@@ -387,7 +387,7 @@ The `deploy-terraform.yaml` pipeline runs Terraform automatically when changes a
 
 ---
 
-### Step 4 — Set GitHub Actions secrets
+### 🟠 Step 4 — Set GitHub Actions secrets
 
 Go to **GitHub → your repo → Settings → Secrets and variables → Actions → New repository secret** and add:
 
@@ -401,7 +401,7 @@ Go to **GitHub → your repo → Settings → Secrets and variables → Actions 
 
 ---
 
-### Step 5 — Install the Renovate GitHub App (optional but recommended)
+### 🟣 Step 5 — Install the Renovate GitHub App (optional but recommended)
 
 Renovate automatically opens PRs when a new ARC chart version is released, which then triggers the deploy-arc.yaml pipeline.
 
