@@ -84,11 +84,14 @@ module "vpc" {
   enable_dns_hostnames = true
 
   private_subnet_tags = {
-    "kubernetes.io/role/internal-elb" = "1"
-  }
-  public_subnet_tags = {
-    "kubernetes.io/role/elb" = "1"
-  }
+  "kubernetes.io/role/internal-elb" = "1"
+  "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+}
+
+public_subnet_tags = {
+  "kubernetes.io/role/elb" = "1"
+  "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+}
 }
 
 # ── EKS cluster ───────────────────────────────────────────────────────────────
@@ -97,12 +100,13 @@ module "eks" {
   version = "~> 21.15"
 
   name = var.cluster_name
-  kubernetes_version = "1.33"
+  kubernetes_version = "1.34"
 
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
 
   endpoint_public_access = true
+  enable_irsa = true
 
   eks_managed_node_groups = {
     default = {
@@ -117,18 +121,18 @@ module "eks" {
 }
 
 # ── OIDC provider for EKS (used by ESO IRSA) ─────────────────────────────────
-resource "aws_iam_openid_connect_provider" "eks" {
-  url             = module.eks.cluster_oidc_issuer_url
-  client_id_list  = ["sts.amazonaws.com"]
-  thumbprint_list = [data.tls_certificate.eks_oidc.certificates[0].sha1_fingerprint]
-}
+# resource "aws_iam_openid_connect_provider" "eks" {
+#   url             = module.eks.cluster_oidc_issuer_url
+#   client_id_list  = ["sts.amazonaws.com"]
+#   thumbprint_list = [data.tls_certificate.eks_oidc.certificates[0].sha1_fingerprint]
+# }
 
 # ── OIDC provider for GitHub Actions ─────────────────────────────────────────
-resource "aws_iam_openid_connect_provider" "github" {
-  url             = "https://token.actions.githubusercontent.com"
-  client_id_list  = ["sts.amazonaws.com"]
-  thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
-}
+# resource "aws_iam_openid_connect_provider" "github" {
+#   url             = "https://token.actions.githubusercontent.com"
+#   client_id_list  = ["sts.amazonaws.com"]
+#   thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
+# }
 
 # ── IAM role for GitHub Actions (deploy-arc.yaml) ────────────────────────────
 resource "aws_iam_role" "github_actions" {

@@ -45,6 +45,9 @@ jobs:
       - name: Terraform Init
         run: terraform init
 
+      - name: Terraform Apply EKS (bootstrap)
+        run: terraform apply -target=module.eks -auto-approve
+
       - name: Terraform Plan
         run: terraform plan -out=tfplan
         env:
