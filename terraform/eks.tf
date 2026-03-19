@@ -1,0 +1,49 @@
+data "aws_caller_identity" "current" {}
+
+data "aws_eks_cluster" "this" {
+  name = module.eks.cluster_name
+
+  depends_on = [module.eks]
+}
+
+data "aws_eks_cluster_auth" "this" {
+  name = module.eks.cluster_name
+
+  depends_on = [module.eks]
+}
+
+data "tls_certificate" "eks_oidc" {
+  url = module.eks.cluster_oidc_issuer_url
+}
+
+module "eks" {
+  source  = "terraform-aws-modules/eks/aws"
+  version = "~> 21.15"
+
+  name               = var.cluster_name
+  kubernetes_version = "1.33"
+
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.private_subnets
+
+  endpoint_public_access = true
+  enable_irsa            = true
+
+  eks_managed_node_groups = {
+    default = {
+      instance_types = [var.node_instance_type]
+
+      min_size     = 1
+      max_size     = 3
+      desired_size = 2
+
+      iam_role_additional_policies = {
+        AmazonEKSWorkerNodePolicy          = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+        AmazonEC2ContainerRegistryReadOnly = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+        AmazonEKS_CNI_Policy               = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+      }
+    }
+  }
+
+  enable_cluster_creator_admin_permissions = true
+}

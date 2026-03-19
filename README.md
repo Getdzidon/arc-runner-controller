@@ -36,10 +36,15 @@ arc-runner-controller/
 │   ├── external-secret.yaml              # ESO ExternalSecret (Options C and D)
 │   └── github-app-secret.yaml.tpl        # Secret shape reference — never commit real values
 ├── terraform/
-│   ├── main.tf                           # EKS, VPC, IAM roles, ESO, SecretStore, ExternalSecret
+│   ├── providers.tf                      # Terraform block, backend, provider configs
+│   ├── vpc.tf                            # VPC module
+│   ├── eks.tf                            # EKS module + data sources
+│   ├── iam.tf                            # ESO IRSA role + policy
+│   ├── secrets.tf                        # AWS Secrets Manager
+│   ├── eso.tf                            # ESO Helm release + SecretStore + ExternalSecret
 │   ├── variables.tf                      # Input variables
 │   ├── outputs.tf                        # Outputs: cluster name, role ARN, region
-│   └── terraform.tfvars.example          # Example values — copy to terraform.tfvars, never commit
+│   └── terraform.tfvars                  # Your values — blocked by .gitignore, never commit
 ├── versions.env                          # Pinned chart versions (updated by Renovate)
 ├── renovate.json                         # Automated dependency update config
 ├── install.sh                            # Local bootstrap script (alternative to the pipeline)
@@ -59,7 +64,7 @@ arc-runner-controller/
 | aws cli | ≥ 2.x | [docs](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html) |
 | terraform | ≥ 1.6 | [docs](https://developer.hashicorp.com/terraform/install) — only needed for Option D |
 
-> **Kubernetes cluster:** ARC requires a running Kubernetes cluster. If you do not have one, use **Option D** in Step 2 — it provisions an EKS cluster via Terraform as part of the setup. If you already have a cluster (EKS, GKE, AKS, or kind), skip Option D and proceed with Options A, B, or C.
+> **Kubernetes cluster:** ARC requires a running Kubernetes cluster. If you do not have one, use **Option D** in Step 3 — it provisions an EKS cluster via Terraform as part of the setup. If you already have a cluster (EKS, GKE, AKS, or kind), skip Option D and proceed with Options A, B, or C.
 
 ---
 
@@ -105,11 +110,58 @@ You now have three values you will need in the steps below:
 
 ---
 
-### Step 2 — Create the Kubernetes secret
+### Step 2 — Create the GitHub Actions OIDC provider and IAM role
+
+The deploy pipelines authenticate to AWS via OIDC — no static credentials. The OIDC provider must exist in your AWS account before anything else can run — both the `deploy-arc.yaml` pipeline and Terraform (Option D) depend on it.
+
+> ⚠️ **This step is required for all options including Option D.** Terraform references the existing OIDC provider via a data source — it does not create it.
+
+```bash
+# 1. Add GitHub OIDC provider to AWS (one time per account)
+aws iam create-open-id-connect-provider \
+  --url https://token.actions.githubusercontent.com \
+  --client-id-list sts.amazonaws.com
+
+# 2. Create trust policy
+cat > /tmp/github-oidc-trust.json <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": {
+      "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com"
+    },
+    "Action": "sts:AssumeRoleWithWebIdentity",
+    "Condition": {
+      "StringEquals": {
+        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+      },
+      "StringLike": {
+        "token.actions.githubusercontent.com:sub": "repo:getdzidon/arc-runner-controller:*"
+      }
+    }
+  }]
+}
+EOF
+
+# 3. Create the role
+aws iam create-role \
+  --role-name github-actions-arc-role \
+  --assume-role-policy-document file:///tmp/github-oidc-trust.json
+
+# 4. Attach EKS access
+aws iam attach-role-policy \
+  --role-name github-actions-arc-role \
+  --policy-arn arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+```
+
+Note the role ARN — you need it in Step 4.
+
+---
+
+### Step 3 — Create the Kubernetes secret
 
 The deploy pipeline assumes `arc-github-app-secret` already exists in the `arc-runners` namespace. It does not create it. You must create it once before the first deploy.
-
-> **If you choose Option D (Terraform):** Terraform provisions the EKS cluster, all IAM roles, the GitHub App secret in AWS Secrets Manager, installs ESO, and applies the SecretStore and ExternalSecret — all in one apply. **Skip Step 3 entirely** as the GitHub Actions OIDC role is also created by Terraform.
 
 Choose one option:
 
@@ -294,119 +346,44 @@ kubectl get secret arc-github-app-secret -n arc-runners
 
 #### `Option D` — Terraform (provisions everything: EKS cluster + IAM + secrets + ESO)
 
-Use this option if you do not have an existing Kubernetes cluster, or if you want all AWS infrastructure managed as code.
+Use this option if you do not have an existing Kubernetes cluster, or if you want all AWS infrastructure managed as code. Requires Step 2 (OIDC provider) to be completed first.
 
 Terraform will create:
 - VPC with public and private subnets
-- EKS cluster (Kubernetes 1.29, t3.medium nodes)
-- GitHub Actions OIDC provider and IAM role (`github-actions-arc-role`)
+- EKS cluster (Kubernetes 1.34, t3.medium nodes)
 - EKS OIDC provider and IAM role for ESO (`ESO-ARC-Role`)
 - AWS Secrets Manager secret (`arc/github-app`) with your GitHub App credentials
 - External Secrets Operator installed via Helm
 - `SecretStore` and `ExternalSecret` applied to the cluster
 
-**Before running Terraform you need an S3 bucket for remote state.** Create it once:
-
-```bash
-aws s3api create-bucket \
-  --bucket <TF_STATE_BUCKET> \
-  --region <AWS_REGION> \
-  --create-bucket-configuration LocationConstraint=<AWS_REGION>
-
-aws s3api put-bucket-versioning \
-  --bucket <TF_STATE_BUCKET> \
-  --versioning-configuration Status=Enabled
-```
-
-Then update the `backend "s3"` block in `terraform/main.tf` with your bucket name and region.
+**Before running Terraform, update** the `backend "s3"` block in `terraform/providers.tf` with your S3 bucket name and region for remote state.
 
 **Option 1 — Run Terraform locally:**
 
 ```bash
 cd terraform
 
-# Copy and fill in your values
-cp terraform.tfvars.example terraform.tfvars
 # Edit terraform.tfvars with your APP_ID, INSTALLATION_ID, and PEM content
-
 terraform init
 terraform plan
 terraform apply
 ```
 
-**Option 2 — Run via the pipeline (recommended):**
+**Option 2 — Run via the pipeline:**
 
-The `deploy-terraform.yaml` pipeline runs Terraform automatically when changes are pushed to `terraform/**`. Before pushing, set these additional GitHub Actions secrets:
+The `deploy-terraform.yaml` pipeline runs Terraform automatically when changes are pushed to `terraform/**`. Before pushing, set these GitHub Actions secrets:
 
 | Secret | Value |
 |--------|-------|
-| `AWS_BOOTSTRAP_ROLE_ARN` | An IAM role with permissions to create EKS, VPC, IAM, and Secrets Manager resources. This is a one-time bootstrap role — see note below |
+| `AWS_IAM_ROLE_ARN` | The OIDC role ARN from Step 2 — used by both the Terraform and ARC deploy pipelines |
+| `AWS_REGION` | e.g. `eu-central-1` |
 | `APP_ID` | App ID from Step 1 |
 | `APP_INSTALLATION_ID` | Installation ID from Step 1 |
 | `APP_PRIVATE_KEY` | Full PEM content of the private key from Step 1 |
 
-> **Bootstrap role note:** `AWS_BOOTSTRAP_ROLE_ARN` is a separate IAM role used only by the Terraform pipeline to create infrastructure. It needs broad permissions (EKS, EC2, IAM, Secrets Manager). Once Terraform runs and creates `github-actions-arc-role`, the `deploy-arc.yaml` pipeline uses that scoped role instead. Create the bootstrap role manually once via the AWS Console or CLI with `AdministratorAccess` and scope it to your repo via OIDC the same way as Step 3.
+> **Note:** The OIDC role from Step 2 needs broad permissions (EKS, EC2, IAM, Secrets Manager) to create infrastructure via Terraform.
 
-**After `terraform apply` completes**, run `terraform output` to get the values for the GitHub Actions secrets in Step 4:
-
-```bash
-terraform output
-# eks_cluster_name          = "arc-ci-cluster"
-# github_actions_role_arn   = "arn:aws:iam::<ACCOUNT_ID>:role/github-actions-arc-role"
-# aws_region                = "eu-central-1"
-```
-
-> **Skip Step 3** — the GitHub Actions OIDC role is already created by Terraform.
-
----
-
-### Step 3 — Create the IAM role for GitHub Actions OIDC
-
-> ⚠️ **Skip this step if you used Option D.** Terraform already created this role.
-
-The deploy-arc.yaml pipeline authenticates to AWS via OIDC — no static credentials. This role must exist before the pipeline can run.
-
-
-```bash
-# 1. Add GitHub OIDC provider to AWS (one time per account)
-aws iam create-open-id-connect-provider \
-  --url https://token.actions.githubusercontent.com \
-  --client-id-list sts.amazonaws.com
-
-# 2. Create trust policy
-cat > /tmp/github-oidc-trust.json <<EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Principal": {
-      "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com"
-    },
-    "Action": "sts:AssumeRoleWithWebIdentity",
-    "Condition": {
-      "StringEquals": {
-        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
-      },
-      "StringLike": {
-        "token.actions.githubusercontent.com:sub": "repo:getdzidon/arc-runner-controller:*"
-      }
-    }
-  }]
-}
-EOF
-
-# 3. Create the role
-aws iam create-role \
-  --role-name github-actions-arc-role \
-  --assume-role-policy-document file:///tmp/github-oidc-trust.json
-
-# 4. Attach EKS access
-aws iam attach-role-policy \
-  --role-name github-actions-arc-role \
-  --policy-arn arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
-```
-
-Note the role ARN — you need it in the next step.
+**After `terraform apply` completes**, the outputs (cluster name, region) are printed automatically — use them for the GitHub Actions secrets in Step 4.
 
 ---
 
@@ -416,7 +393,7 @@ Go to **GitHub → your repo → Settings → Secrets and variables → Actions 
 
 | Secret | Value |
 |--------|-------|
-| `AWS_IAM_ROLE_ARN` | ARN of the role created in Step 3, e.g. `arn:aws:iam::<ACCOUNT_ID>:role/github-actions-arc-role` |
+| `AWS_IAM_ROLE_ARN` | ARN of the role created in Step 2, e.g. `arn:aws:iam::<ACCOUNT_ID>:role/github-actions-arc-role` |
 | `AWS_REGION` | e.g. `eu-central-1` |
 | `EKS_CLUSTER_NAME` | Your EKS cluster name |
 
@@ -440,7 +417,7 @@ Dependabot (for GitHub Actions version updates) is built into GitHub and require
 There are two pipelines. Which ones run depends on what files you change:
 
 **`deploy-terraform.yaml`** — runs when `terraform/**` changes:
-1. Authenticates to AWS via OIDC (using `AWS_BOOTSTRAP_ROLE_ARN`)
+1. Authenticates to AWS via OIDC (using `AWS_IAM_ROLE_ARN` from Step 2)
 2. Runs `terraform init` and `terraform plan`
 3. Applies the plan — provisions EKS, VPC, IAM roles, Secrets Manager secret, ESO, SecretStore, ExternalSecret
 4. Prints outputs (cluster name, role ARN, region) to use as GitHub Actions secrets
@@ -448,7 +425,7 @@ There are two pipelines. Which ones run depends on what files you change:
 **`deploy-arc.yaml`** — runs when `arc-system/**`, `versions.env`, `install.sh`, or the workflow file changes:
 1. Checks out the repo
 2. Loads the pinned chart version from `versions.env`
-3. Authenticates to AWS via OIDC (using `AWS_IAM_ROLE_ARN` — the scoped role from Step 3 or Terraform)
+3. Authenticates to AWS via OIDC (using `AWS_IAM_ROLE_ARN` from Step 2)
 4. Configures kubectl against your EKS cluster
 5. Applies RBAC (`arc-system/rbac.yaml`)
 6. Applies NetworkPolicies (`arc-system/network-policy.yaml`)
@@ -655,7 +632,7 @@ Run `install.sh` manually from your machine **instead of** pushing to `main`, fo
 - You are testing locally before setting up the pipeline
 - You do not want to use the GitOps pipeline at all
 
-Run it after completing Steps 1–4 (GitHub App, IAM role, etc.) with your kubeconfig pointing at the target cluster:
+Run it after completing Steps 1–4 (GitHub App, OIDC, secrets, etc.) with your kubeconfig pointing at the target cluster:
 
 ```bash
 export GITHUB_APP_ID=<app-id>

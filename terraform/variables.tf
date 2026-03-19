@@ -16,12 +16,6 @@ variable "node_instance_type" {
   default     = "t3.medium"
 }
 
-variable "github_repo" {
-  description = "GitHub repo in owner/repo format — used to scope the OIDC trust"
-  type        = string
-  default     = "Getdzidon/arc-runner-controller"
-}
-
 variable "github_app_id" {
   description = "GitHub App ID (from Step 1)"
   type        = string
