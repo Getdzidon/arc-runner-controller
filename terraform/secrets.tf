@@ -1,6 +1,6 @@
 resource "aws_secretsmanager_secret" "github_app" {
-  name                    = "arc/github-app"
-  recovery_window_in_days = 7
+  name                    = "arc/github-app-secret"
+  recovery_window_in_days = 0
 }
 
 resource "aws_secretsmanager_secret_version" "github_app" {
