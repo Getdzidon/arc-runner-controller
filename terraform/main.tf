@@ -49,7 +49,7 @@ data "tls_certificate" "eks_oidc" {
 
 # ── Providers that depend on EKS being up ────────────────────────────────────
 provider "helm" {
-  kubernetes {
+  kubernetes = {
     host                   = data.aws_eks_cluster.this.endpoint
     cluster_ca_certificate = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
     token                  = data.aws_eks_cluster_auth.this.token
@@ -90,42 +90,26 @@ module "vpc" {
 # ── EKS cluster ───────────────────────────────────────────────────────────────
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "21.15.0" # pin exact version
+  version = "~> 21.15"
 
-  cluster_name    = var.cluster_name
-  cluster_version = "1.29"
+  name = var.cluster_name
+  kubernetes_version = "1.33"
 
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
 
-  cluster_endpoint_public_access = true
-
-  enable_cluster_creator_admin_permissions = true
+  endpoint_public_access = true
 
   eks_managed_node_groups = {
     default = {
-      name = "default"
-
       instance_types = [var.node_instance_type]
-
-      min_size     = 1
-      max_size     = 3
-      desired_size = 2
-
-      # avoids some EKS upgrade/recreate issues later
-      ami_type = "AL2_x86_64"
-
-      # ensures nodes can join cluster properly
-      iam_role_additional_policies = {
-        AmazonSSMManagedInstanceCore = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-      }
+      min_size       = 1
+      max_size       = 3
+      desired_size   = 2
     }
   }
 
-  tags = {
-    Environment = "dev"
-    Terraform   = "true"
-  }
+  enable_cluster_creator_admin_permissions = true
 }
 
 # ── OIDC provider for EKS (used by ESO IRSA) ─────────────────────────────────
