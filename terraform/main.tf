@@ -21,18 +21,18 @@ terraform {
   }
 
   backend "s3" {
-    bucket = "deebest-tf-state-bucket" # replace with your S3 bucket name here
+    bucket = "deebest-tf-state-bucket"
     key    = "arc-runner-controller/terraform.tfstate"
     region = "eu-central-1"
   }
 }
-
 
 provider "aws" {
   region = var.aws_region
 }
 
 # ── Data sources ──────────────────────────────────────────────────────────────
+
 data "aws_caller_identity" "current" {}
 
 data "aws_eks_cluster" "this" {
@@ -51,9 +51,14 @@ data "tls_certificate" "eks_oidc" {
   url = module.eks.cluster_oidc_issuer_url
 }
 
-# ── Providers that depend on EKS being up ────────────────────────────────────
+data "aws_iam_openid_connect_provider" "github" {
+  url = "https://token.actions.githubusercontent.com"
+}
+
+# ── Providers ────────────────────────────────────────────────────────────────
+
 provider "helm" {
-  kubernetes = {
+  kubernetes {
     host                   = data.aws_eks_cluster.this.endpoint
     cluster_ca_certificate = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
     token                  = data.aws_eks_cluster_auth.this.token
@@ -68,6 +73,7 @@ provider "kubectl" {
 }
 
 # ── VPC ───────────────────────────────────────────────────────────────────────
+
 module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
   version = "~> 6.6"
@@ -84,29 +90,30 @@ module "vpc" {
   enable_dns_hostnames = true
 
   private_subnet_tags = {
-  "kubernetes.io/role/internal-elb" = "1"
-  "kubernetes.io/cluster/${var.cluster_name}" = "shared"
-}
+    "kubernetes.io/role/internal-elb" = "1"
+    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+  }
 
-public_subnet_tags = {
-  "kubernetes.io/role/elb" = "1"
-  "kubernetes.io/cluster/${var.cluster_name}" = "shared"
-}
+  public_subnet_tags = {
+    "kubernetes.io/role/elb" = "1"
+    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+  }
 }
 
 # ── EKS cluster ───────────────────────────────────────────────────────────────
+
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "~> 21.15"
 
-  name = var.cluster_name
+  name    = var.cluster_name
   kubernetes_version = "1.34"
 
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
 
   endpoint_public_access = true
-  enable_irsa = true
+  enable_irsa            = true
 
   eks_managed_node_groups = {
     default = {
@@ -120,21 +127,8 @@ module "eks" {
   enable_cluster_creator_admin_permissions = true
 }
 
-# ── OIDC provider for EKS (used by ESO IRSA) ─────────────────────────────────
-# resource "aws_iam_openid_connect_provider" "eks" {
-#   url             = module.eks.cluster_oidc_issuer_url
-#   client_id_list  = ["sts.amazonaws.com"]
-#   thumbprint_list = [data.tls_certificate.eks_oidc.certificates[0].sha1_fingerprint]
-# }
+# ── GitHub Actions IAM Role ──────────────────────────────────────────────────
 
-# ── OIDC provider for GitHub Actions ─────────────────────────────────────────
-# resource "aws_iam_openid_connect_provider" "github" {
-#   url             = "https://token.actions.githubusercontent.com"
-#   client_id_list  = ["sts.amazonaws.com"]
-#   thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
-# }
-
-# ── IAM role for GitHub Actions (deploy-arc.yaml) ────────────────────────────
 resource "aws_iam_role" "github_actions" {
   name = "github-actions-arc-role"
 
@@ -143,7 +137,7 @@ resource "aws_iam_role" "github_actions" {
     Statement = [{
       Effect = "Allow"
       Principal = {
-        Federated = aws_iam_openid_connect_provider.github.arn
+        Federated = data.aws_iam_openid_connect_provider.github.arn
       }
       Action = "sts:AssumeRoleWithWebIdentity"
       Condition = {
@@ -163,7 +157,8 @@ resource "aws_iam_role_policy_attachment" "github_actions_eks" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
 }
 
-# ── AWS Secrets Manager — GitHub App secret ───────────────────────────────────
+# ── Secrets Manager ──────────────────────────────────────────────────────────
+
 resource "aws_secretsmanager_secret" "github_app" {
   name                    = "arc/github-app"
   recovery_window_in_days = 7
@@ -178,18 +173,23 @@ resource "aws_secretsmanager_secret_version" "github_app" {
   })
 }
 
-# ── IAM role for ESO (IRSA) ───────────────────────────────────────────────────
+# ── IRSA Role for External Secrets Operator ──────────────────────────────────
+
 locals {
   oidc_issuer = trimprefix(module.eks.cluster_oidc_issuer_url, "https://")
 }
 
 resource "aws_iam_policy" "eso" {
   name = "ESO-ARC-SecretsPolicy"
+
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect   = "Allow"
-      Action   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
+      Effect = "Allow"
+      Action = [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret"
+      ]
       Resource = "${aws_secretsmanager_secret.github_app.arn}*"
     }]
   })
@@ -203,7 +203,7 @@ resource "aws_iam_role" "eso" {
     Statement = [{
       Effect = "Allow"
       Principal = {
-        Federated = aws_iam_openid_connect_provider.eks.arn
+        Federated = module.eks.oidc_provider_arn
       }
       Action = "sts:AssumeRoleWithWebIdentity"
       Condition = {
@@ -221,7 +221,8 @@ resource "aws_iam_role_policy_attachment" "eso" {
   policy_arn = aws_iam_policy.eso.arn
 }
 
-# ── Install External Secrets Operator via Helm ────────────────────────────────
+# ── External Secrets Operator ────────────────────────────────────────────────
+
 resource "helm_release" "eso" {
   name             = "external-secrets"
   repository       = "https://charts.external-secrets.io"
@@ -240,14 +241,14 @@ resource "helm_release" "eso" {
   depends_on = [module.eks]
 }
 
-# ── Apply SecretStore ─────────────────────────────────────────────────────────
+# ── Kubernetes manifests ─────────────────────────────────────────────────────
+
 resource "kubectl_manifest" "secret_store" {
   yaml_body = templatefile("${path.module}/../arc-system/secret-store.yaml", {})
 
   depends_on = [helm_release.eso]
 }
 
-# ── Apply ExternalSecret ──────────────────────────────────────────────────────
 resource "kubectl_manifest" "external_secret" {
   yaml_body = templatefile("${path.module}/../arc-system/external-secret.yaml", {})
 
