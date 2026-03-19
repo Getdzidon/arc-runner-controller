@@ -364,7 +364,7 @@ terraform output
 
 > ⚠️ **Skip this step if you used Option D.** Terraform already created this role.
 
-The deploy pipeline authenticates to AWS via OIDC — no static credentials. This role must exist before the pipeline can run.
+The deploy-arc.yaml pipeline authenticates to AWS via OIDC — no static credentials. This role must exist before the pipeline can run.
 
 
 ```bash
@@ -426,7 +426,7 @@ Go to **GitHub → your repo → Settings → Secrets and variables → Actions 
 
 ### Step 5 — Install the Renovate GitHub App (optional but recommended)
 
-Renovate automatically opens PRs when a new ARC chart version is released, which then triggers the deploy pipeline.
+Renovate automatically opens PRs when a new ARC chart version is released, which then triggers the deploy-arc.yaml pipeline.
 
 1. Go to [github.com/apps/renovate](https://github.com/apps/renovate)
 2. Click **Install** and grant access to this repository

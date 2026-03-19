@@ -19,7 +19,7 @@ variable "node_instance_type" {
 variable "github_repo" {
   description = "GitHub repo in owner/repo format — used to scope the OIDC trust"
   type        = string
-  default     = "getdzidon/arc-runner-controller"
+  default     = "Getdzidon/arc-runner-controller"
 }
 
 variable "github_app_id" {

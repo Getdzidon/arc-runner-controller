@@ -21,9 +21,9 @@ terraform {
   }
 
   backend "s3" {
-    bucket = "<TF_STATE_BUCKET>"
+    bucket = "deebest-tf-state-bucket" # replace with your S3 bucket name here
     key    = "arc-runner-controller/terraform.tfstate"
-    region = "<AWS_REGION>"
+    region = "eu-central-1"
   }
 }
 
