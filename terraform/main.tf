@@ -222,7 +222,7 @@ resource "helm_release" "eso" {
   create_namespace = true
   wait             = true
 
-  set {
+  set = {
     name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
     value = aws_iam_role.eso.arn
   }
