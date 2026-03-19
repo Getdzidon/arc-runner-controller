@@ -350,7 +350,7 @@ Use this option if you do not have an existing Kubernetes cluster, or if you wan
 
 Terraform will create:
 - VPC with public and private subnets
-- EKS cluster (Kubernetes 1.32, t3.medium nodes)
+- EKS cluster (Kubernetes 1.33, t3.medium nodes)
 - EKS OIDC provider and IAM role for ESO (`ESO-ARC-Role`)
 - AWS Secrets Manager secret (`arc/github-app`) with your GitHub App credentials
 - External Secrets Operator installed via Helm
