@@ -22,7 +22,8 @@ Once the manual steps below are done and the code is pushed to `main`, the `depl
 arc-runner-controller/
 ├── .github/
 │   ├── workflows/
-│   │   ├── deploy-arc.yaml               # GitOps pipeline — deploys ARC itself (automated)
+│   │   ├── deploy-terraform.yaml         # Pipeline — provisions AWS infra + EKS via Terraform (Option D)
+│   │   ├── deploy-arc.yaml               # Pipeline — deploys ARC onto the cluster (automated)
 │   │   └── example-arc-job.yaml          # CI pipeline that runs ON ARC runners
 │   └── dependabot.yml
 ├── arc-system/
@@ -31,9 +32,14 @@ arc-runner-controller/
 │   ├── rbac.yaml                         # ServiceAccount, Role, RoleBinding
 │   ├── network-policy.yaml               # NetworkPolicies for runner isolation
 │   ├── service-monitor.yaml              # Prometheus ServiceMonitors
-│   ├── secret-store.yaml                 # ESO SecretStore (Option C only)
-│   ├── external-secret.yaml              # ESO ExternalSecret (Option C only)
+│   ├── secret-store.yaml                 # ESO SecretStore (Options C and D)
+│   ├── external-secret.yaml              # ESO ExternalSecret (Options C and D)
 │   └── github-app-secret.yaml.tpl        # Secret shape reference — never commit real values
+├── terraform/
+│   ├── main.tf                           # EKS, VPC, IAM roles, ESO, SecretStore, ExternalSecret
+│   ├── variables.tf                      # Input variables
+│   ├── outputs.tf                        # Outputs: cluster name, role ARN, region
+│   └── terraform.tfvars.example          # Example values — copy to terraform.tfvars, never commit
 ├── versions.env                          # Pinned chart versions (updated by Renovate)
 ├── renovate.json                         # Automated dependency update config
 ├── install.sh                            # Local bootstrap script (alternative to the pipeline)
@@ -49,14 +55,17 @@ arc-runner-controller/
 |------|---------|---------|
 | kubectl | ≥ 1.26 | [docs](https://kubernetes.io/docs/tasks/tools/) |
 | helm | ≥ 3.12 | [docs](https://helm.sh/docs/intro/install/) |
-| Kubernetes cluster | ≥ 1.26 | e.g. EKS, GKE, AKS, kind |
+| Kubernetes cluster | ≥ 1.26 | e.g. EKS, GKE, AKS, kind — **see note below** |
 | aws cli | ≥ 2.x | [docs](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html) |
+| terraform | ≥ 1.6 | [docs](https://developer.hashicorp.com/terraform/install) — only needed for Option D |
+
+> **Kubernetes cluster:** ARC requires a running Kubernetes cluster. If you do not have one, use **Option D** in Step 2 — it provisions an EKS cluster via Terraform as part of the setup. If you already have a cluster (EKS, GKE, AKS, or kind), skip Option D and proceed with Options A, B, or C.
 
 ---
 
 ## ⚠️ Manual steps — do these first, in order
 
-These steps cannot be automated. Complete all of them before pushing to `main`.
+Complete all of them before pushing to `main`.
 
 ---
 
@@ -74,7 +83,7 @@ These steps cannot be automated. Complete all of them before pushing to `main`.
    - `Metadata` → Read-only
 4. Under **Where can this GitHub App be installed?** select *Only on this account*
 5. Click **Create GitHub App**
-6. Note the **App ID** shown at the top of the next page
+6. Note the `App ID` shown at the top of the next page
 
 **Generate a private key:**
 
@@ -87,7 +96,7 @@ These steps cannot be automated. Complete all of them before pushing to `main`.
 2. Choose *All repositories* or select specific repos → click **Install**
 3. After install you are redirected to:
    `https://github.com/settings/installations/<INSTALLATION_ID>`
-4. Note the number at the end — that is your **Installation ID**
+4. Note the number at the end — that is your `Installation ID`
 
 You now have three values you will need in the steps below:
 - `APP_ID`
@@ -100,11 +109,13 @@ You now have three values you will need in the steps below:
 
 The deploy pipeline assumes `arc-github-app-secret` already exists in the `arc-runners` namespace. It does not create it. You must create it once before the first deploy.
 
+> **If you choose Option D (Terraform):** Terraform provisions the EKS cluster, all IAM roles, the GitHub App secret in AWS Secrets Manager, installs ESO, and applies the SecretStore and ExternalSecret — all in one apply. **Skip Step 3 entirely** as the GitHub Actions OIDC role is also created by Terraform.
+
 Choose one option:
 
 ---
 
-#### Option A — kubectl (quick, local dev)
+#### `Option A` — kubectl (quick, local dev)
 
 ```bash
 kubectl create namespace arc-runners
@@ -124,7 +135,7 @@ kubectl get secret arc-github-app-secret -n arc-runners
 
 ---
 
-#### Option B — Sealed Secrets (GitOps-safe, recommended for teams)
+#### `Option B` — Sealed Secrets (GitOps-safe, recommended for teams)
 
 Sealed Secrets encrypts the secret so it is safe to commit to Git.
 
@@ -190,7 +201,7 @@ kubectl get secret arc-github-app-secret -n arc-runners
 
 ---
 
-#### Option C — External Secrets Operator + AWS Secrets Manager (production)
+#### `Option C` — External Secrets Operator + AWS Secrets Manager (production)
 
 Secrets live in AWS Secrets Manager; ESO syncs them into Kubernetes automatically.
 
@@ -281,9 +292,80 @@ kubectl get secret arc-github-app-secret -n arc-runners
 
 ---
 
+#### `Option D` — Terraform (provisions everything: EKS cluster + IAM + secrets + ESO)
+
+Use this option if you do not have an existing Kubernetes cluster, or if you want all AWS infrastructure managed as code.
+
+Terraform will create:
+- VPC with public and private subnets
+- EKS cluster (Kubernetes 1.29, t3.medium nodes)
+- GitHub Actions OIDC provider and IAM role (`github-actions-arc-role`)
+- EKS OIDC provider and IAM role for ESO (`ESO-ARC-Role`)
+- AWS Secrets Manager secret (`arc/github-app`) with your GitHub App credentials
+- External Secrets Operator installed via Helm
+- `SecretStore` and `ExternalSecret` applied to the cluster
+
+**Before running Terraform you need an S3 bucket for remote state.** Create it once:
+
+```bash
+aws s3api create-bucket \
+  --bucket <TF_STATE_BUCKET> \
+  --region <AWS_REGION> \
+  --create-bucket-configuration LocationConstraint=<AWS_REGION>
+
+aws s3api put-bucket-versioning \
+  --bucket <TF_STATE_BUCKET> \
+  --versioning-configuration Status=Enabled
+```
+
+Then update the `backend "s3"` block in `terraform/main.tf` with your bucket name and region.
+
+**Option 1 — Run Terraform locally:**
+
+```bash
+cd terraform
+
+# Copy and fill in your values
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with your APP_ID, INSTALLATION_ID, and PEM content
+
+terraform init
+terraform plan
+terraform apply
+```
+
+**Option 2 — Run via the pipeline (recommended):**
+
+The `deploy-terraform.yaml` pipeline runs Terraform automatically when changes are pushed to `terraform/**`. Before pushing, set these additional GitHub Actions secrets:
+
+| Secret | Value |
+|--------|-------|
+| `AWS_BOOTSTRAP_ROLE_ARN` | An IAM role with permissions to create EKS, VPC, IAM, and Secrets Manager resources. This is a one-time bootstrap role — see note below |
+| `APP_ID` | App ID from Step 1 |
+| `APP_INSTALLATION_ID` | Installation ID from Step 1 |
+| `APP_PRIVATE_KEY` | Full PEM content of the private key from Step 1 |
+
+> **Bootstrap role note:** `AWS_BOOTSTRAP_ROLE_ARN` is a separate IAM role used only by the Terraform pipeline to create infrastructure. It needs broad permissions (EKS, EC2, IAM, Secrets Manager). Once Terraform runs and creates `github-actions-arc-role`, the `deploy-arc.yaml` pipeline uses that scoped role instead. Create the bootstrap role manually once via the AWS Console or CLI with `AdministratorAccess` and scope it to your repo via OIDC the same way as Step 3.
+
+**After `terraform apply` completes**, run `terraform output` to get the values for the GitHub Actions secrets in Step 4:
+
+```bash
+terraform output
+# eks_cluster_name          = "arc-ci-cluster"
+# github_actions_role_arn   = "arn:aws:iam::<ACCOUNT_ID>:role/github-actions-arc-role"
+# aws_region                = "eu-central-1"
+```
+
+> **Skip Step 3** — the GitHub Actions OIDC role is already created by Terraform.
+
+---
+
 ### Step 3 — Create the IAM role for GitHub Actions OIDC
 
+> ⚠️ **Skip this step if you used Option D.** Terraform already created this role.
+
 The deploy pipeline authenticates to AWS via OIDC — no static credentials. This role must exist before the pipeline can run.
+
 
 ```bash
 # 1. Add GitHub OIDC provider to AWS (one time per account)
@@ -355,11 +437,18 @@ Dependabot (for GitHub Actions version updates) is built into GitHub and require
 
 ## ✅ What happens automatically after you push to main
 
-Once all manual steps above are complete, push to `main`. The `deploy-arc.yaml` pipeline runs and does the following without any further input:
+There are two pipelines. Which ones run depends on what files you change:
 
+**`deploy-terraform.yaml`** — runs when `terraform/**` changes:
+1. Authenticates to AWS via OIDC (using `AWS_BOOTSTRAP_ROLE_ARN`)
+2. Runs `terraform init` and `terraform plan`
+3. Applies the plan — provisions EKS, VPC, IAM roles, Secrets Manager secret, ESO, SecretStore, ExternalSecret
+4. Prints outputs (cluster name, role ARN, region) to use as GitHub Actions secrets
+
+**`deploy-arc.yaml`** — runs when `arc-system/**`, `versions.env`, `install.sh`, or the workflow file changes:
 1. Checks out the repo
 2. Loads the pinned chart version from `versions.env`
-3. Authenticates to AWS via OIDC (using the role from Step 3)
+3. Authenticates to AWS via OIDC (using `AWS_IAM_ROLE_ARN` — the scoped role from Step 3 or Terraform)
 4. Configures kubectl against your EKS cluster
 5. Applies RBAC (`arc-system/rbac.yaml`)
 6. Applies NetworkPolicies (`arc-system/network-policy.yaml`)
@@ -367,8 +456,6 @@ Once all manual steps above are complete, push to `main`. The `deploy-arc.yaml` 
 8. Installs the runner scale set via Helm
 9. Applies ServiceMonitors (`arc-system/service-monitor.yaml`)
 10. Verifies the rollout
-
-The pipeline re-runs automatically on any future push that changes `arc-system/**`, `versions.env`, `install.sh`, or the workflow file itself.
 
 **Version updates are also automated:**
 - Renovate opens a PR when a new ARC chart version is released → merge the PR → pipeline deploys the new version

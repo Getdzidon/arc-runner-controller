@@ -1,0 +1,69 @@
+name: Deploy Terraform Infrastructure
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - ".github/workflows/deploy-terraform.yaml"
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Terraform action to run"
+        required: true
+        default: "apply"
+        type: choice
+        options: [apply, destroy]
+
+permissions:
+  contents: read
+  id-token: write   # required for OIDC
+
+jobs:
+  terraform:
+    name: Terraform ${{ github.event.inputs.action || 'apply' }}
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.7.0"
+
+      - name: Authenticate to AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_BOOTSTRAP_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan
+        env:
+          TF_VAR_github_app_id: ${{ secrets.APP_ID }}
+          TF_VAR_github_app_installation_id: ${{ secrets.APP_INSTALLATION_ID }}
+          TF_VAR_github_app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Terraform Apply
+        if: ${{ github.event.inputs.action != 'destroy' }}
+        run: terraform apply -auto-approve tfplan
+
+      - name: Terraform Destroy
+        if: ${{ github.event.inputs.action == 'destroy' }}
+        run: terraform destroy -auto-approve
+        env:
+          TF_VAR_github_app_id: ${{ secrets.APP_ID }}
+          TF_VAR_github_app_installation_id: ${{ secrets.APP_INSTALLATION_ID }}
+          TF_VAR_github_app_private_key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Print outputs
+        if: ${{ github.event.inputs.action != 'destroy' }}
+        run: terraform output

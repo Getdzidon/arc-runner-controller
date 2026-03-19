@@ -1,11 +1,32 @@
 version: 2
 updates:
   - package-ecosystem: "github-actions"
-    directory: "/"
+    directory: "/.github/workflows"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "github-actions update:"
     labels:
       - "dependencies"
       - "github-actions"
+    # reviewers:  
+    #   - "dependabot"
+    #   - "Getdzidon"
+
+
+  # Monitor Terraform dependencies in the infra directory
+  - package-ecosystem: "terraform"
+    directory: "/terraform"
+    target-branch: "main"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
     commit-message:
-      prefix: "chore"
+      prefix: "terraform update:"
+    labels:
+      - "dependencies"
+      - "terraform"
+    # reviewers:
+    #   - "dependabot"
+    #   - "Getdzidon"

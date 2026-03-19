@@ -4,3 +4,11 @@
 arc-system/github-app-secret.yaml
 MY_NOTES.md
 MY_NOTES.txt
+
+# Terraform
+terraform/.terraform/
+terraform/terraform.tfvars
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/*.tfplan
+terraform/tfplan
