@@ -17,8 +17,9 @@ data "tls_certificate" "eks_oidc" {
 }
 
 # ── EKS cluster + managed node group ────────────────────────────────────────
-# The node group is defined inside the module so it inherits the correct
-# cluster and node security groups automatically.
+# Nodes use the EKS-managed cluster security group directly (no separate node
+# SG). This ensures bidirectional communication between the control plane and
+# nodes without needing cross-SG rules.
 
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
@@ -33,6 +34,10 @@ module "eks" {
   endpoint_public_access  = true
   endpoint_private_access = true
   enable_irsa            = true
+
+  # Disable the separate node security group — nodes will use the
+  # EKS-managed cluster security group which already trusts itself.
+  create_node_security_group = false
 
   eks_managed_node_groups = {
     default = {
@@ -50,32 +55,5 @@ module "eks" {
     }
   }
 
-  # Allow the control plane to reach nodes (health checks, kubelet port 10250).
-  node_security_group_additional_rules = {
-    ingress_cluster_to_nodes = {
-      description                   = "Cluster SG to node SG"
-      protocol                      = "-1"
-      from_port                     = 0
-      to_port                       = 0
-      type                          = "ingress"
-      source_cluster_security_group = true
-    }
-  }
-
   enable_cluster_creator_admin_permissions = true
-}
-
-# ── Allow nodes to reach the control plane ───────────────────────────────────
-# The EKS-managed cluster SG only trusts itself by default. This rule lets
-# nodes (on a separate SG) send traffic back to the control plane for
-# kubelet registration and API calls.
-
-resource "aws_security_group_rule" "nodes_to_cluster" {
-  type                     = "ingress"
-  from_port                = 0
-  to_port                  = 0
-  protocol                 = "-1"
-  security_group_id        = module.eks.cluster_security_group_id
-  source_security_group_id = module.eks.node_security_group_id
-  description              = "Node SG to cluster SG"
 }
