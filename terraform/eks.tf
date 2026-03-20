@@ -36,7 +36,7 @@ module "eks" {
   enable_irsa            = true
 
   # EKS add-ons — required for nodes to become Ready
-  cluster_addons = {
+  addons = {
     "vpc-cni"    = { most_recent = true }
     "kube-proxy" = { most_recent = true }
     "coredns"    = { most_recent = true }
