@@ -14,6 +14,7 @@ set -euo pipefail
 
 # ── Load pinned chart version ─────────────────────────────────────────────────
 # shellcheck source=versions.env
+# amazonq-ignore-next-line
 source "$(dirname "$0")/versions.env"
 
 ARC_NAMESPACE="arc-system"
