@@ -50,9 +50,20 @@ module "eks" {
     }
   }
 
-  # Attach the EKS-managed cluster security group to nodes so they can
-  # communicate with the control plane. Without this, the cluster SG only
-  # trusts itself and nodes on a separate SG cannot register as healthy.
+  # Allow nodes to send traffic to the control plane (kubelet registration,
+  # API calls). The cluster SG only trusts itself by default.
+  cluster_security_group_additional_rules = {
+    ingress_nodes_to_cluster = {
+      description                = "Node SG to cluster SG"
+      protocol                   = "-1"
+      from_port                  = 0
+      to_port                    = 0
+      type                       = "ingress"
+      source_node_security_group = true
+    }
+  }
+
+  # Allow the control plane to reach nodes (health checks, kubelet port 10250).
   node_security_group_additional_rules = {
     ingress_cluster_to_nodes = {
       description                   = "Cluster SG to node SG"
