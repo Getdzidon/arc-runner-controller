@@ -35,6 +35,13 @@ module "eks" {
   endpoint_private_access = true
   enable_irsa            = true
 
+  # EKS add-ons — required for nodes to become Ready
+  cluster_addons = {
+    "vpc-cni"    = { most_recent = true }
+    "kube-proxy" = { most_recent = true }
+    "coredns"    = { most_recent = true }
+  }
+
   # Disable the separate node security group — nodes will use the
   # EKS-managed cluster security group which already trusts itself.
   create_node_security_group = false
