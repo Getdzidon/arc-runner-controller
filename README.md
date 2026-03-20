@@ -183,7 +183,7 @@ The deploy pipeline assumes a running Kubernetes cluster with `arc-github-app-se
 aws eks create-cluster \
   --name arc-ci-cluster \
   --region eu-central-1 \
-  --kubernetes-version 1.32 \
+  --kubernetes-version 1.35 \
   --role-arn arn:aws:iam::<ACCOUNT_ID>:role/<EKS_CLUSTER_ROLE> \
   --resources-vpc-config subnetIds=<PRIVATE_SUBNET_1>,<PRIVATE_SUBNET_2>,endpointPublicAccess=true
 
@@ -415,7 +415,7 @@ Use this option if you want all AWS infrastructure managed as code. Requires Ste
 
 Terraform will create:
 - VPC with public and private subnets
-- EKS cluster (Kubernetes 1.32, t3.medium nodes)
+- EKS cluster (Kubernetes 1.35, t3.medium nodes)
 - EKS OIDC provider and IAM role for ESO (`ESO-ARC-Role`)
 - AWS Secrets Manager secret (`arc/github-app`) with your GitHub App credentials
 - External Secrets Operator installed via Helm
