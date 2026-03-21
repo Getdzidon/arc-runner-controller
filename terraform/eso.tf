@@ -17,10 +17,15 @@ resource "helm_release" "eso" {
   depends_on = [module.node_group]
 }
 
+resource "time_sleep" "wait_for_eso_crds" {
+  create_duration = "30s"
+  depends_on      = [helm_release.eso]
+}
+
 resource "kubectl_manifest" "secret_store" {
   yaml_body = templatefile("${path.module}/../arc-system/secret-store.yaml", {})
 
-  depends_on = [helm_release.eso]
+  depends_on = [time_sleep.wait_for_eso_crds]
 }
 
 resource "kubectl_manifest" "external_secret" {
