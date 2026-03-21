@@ -16,7 +16,7 @@ data "tls_certificate" "eks_oidc" {
   url = module.eks.cluster_oidc_issuer_url
 }
 
-# ── EKS cluster + managed node group ────────────────────────────────────────
+# ── EKS cluster ─────────────────────────────────────────────────────────────
 # Nodes use the EKS-managed cluster security group directly (no separate node
 # SG). This ensures bidirectional communication between the control plane and
 # nodes without needing cross-SG rules.
@@ -35,11 +35,10 @@ module "eks" {
   endpoint_private_access = true
   enable_irsa            = true
 
-  # EKS add-ons — required for nodes to become Ready
+  # EKS add-ons — vpc-cni and kube-proxy go Active without nodes
   addons = {
     "vpc-cni"    = { most_recent = true }
     "kube-proxy" = { most_recent = true }
-    "coredns"    = { most_recent = true }
   }
 
   # Disable the separate node security group — nodes will use the
@@ -55,10 +54,10 @@ module "node_group" {
   source  = "terraform-aws-modules/eks/aws//modules/eks-managed-node-group"
   version = "~> 21.15"
 
-  name            = "default"
-  cluster_name    = module.eks.cluster_name
+  name               = "default"
+  cluster_name       = module.eks.cluster_name
   kubernetes_version = module.eks.cluster_version
-  subnet_ids      = module.vpc.private_subnets
+  subnet_ids         = module.vpc.private_subnets
 
   cluster_primary_security_group_id = module.eks.cluster_primary_security_group_id
   cluster_service_cidr              = module.eks.cluster_service_cidr
@@ -78,4 +77,23 @@ module "node_group" {
   }
 
   depends_on = [module.eks]
+}
+
+# ── CoreDNS add-on (needs nodes, so it goes after the node group) ───────────
+
+data "aws_eks_addon_version" "coredns" {
+  addon_name         = "coredns"
+  kubernetes_version = module.eks.cluster_version
+  most_recent        = true
+}
+
+resource "aws_eks_addon" "coredns" {
+  cluster_name  = module.eks.cluster_name
+  addon_name    = "coredns"
+  addon_version = data.aws_eks_addon_version.coredns.version
+
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "OVERWRITE"
+
+  depends_on = [module.node_group]
 }
