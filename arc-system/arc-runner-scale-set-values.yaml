@@ -1,10 +1,10 @@
 # Helm values for the runner scale set
 # Chart: oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
 
-## GitHub target — getdzidon's account
+## GitHub target
 githubConfigUrl: "https://github.com/Getdzidon/arc-runner-controller"
 
-## Reference the GitHub App secret created by install.sh
+## Reference the GitHub App secret synced by ESO
 githubConfigSecret: arc-github-app-secret
 
 ## Runner scale set name — used in `runs-on:` in your workflows
@@ -13,21 +13,3 @@ runnerScaleSetName: "arc-runner-set"
 ## Autoscaling boundaries
 minRunners: 1
 maxRunners: 10
-
-## Runner pod template
-template:
-  spec:
-    serviceAccountName: arc-runner-sa
-    containers:
-      - name: runner
-        image: ghcr.io/actions/actions-runner:latest
-        resources:
-          requests:
-            cpu: 500m
-            memory: 512Mi
-          limits:
-            cpu: "2"
-            memory: 2Gi
-        env:
-          - name: ACTIONS_RUNNER_REQUIRE_JOB_CONTAINER
-            value: "false"
