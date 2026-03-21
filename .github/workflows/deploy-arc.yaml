@@ -75,8 +75,8 @@ jobs:
             --values arc-system/arc-runner-scale-set-values.yaml \
             --wait --timeout 5m
 
-      - name: Apply ServiceMonitors
-        run: kubectl apply -f arc-system/service-monitor.yaml
+      # - name: Apply ServiceMonitors  # Requires Prometheus Operator — enable later
+      #   run: kubectl apply -f arc-system/service-monitor.yaml
 
       - name: Verify rollout
         run: |
