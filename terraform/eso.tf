@@ -33,10 +33,24 @@ resource "kubectl_manifest" "arc_runners_namespace" {
   depends_on = [time_sleep.wait_for_eso_crds]
 }
 
+resource "kubectl_manifest" "eso_service_account" {
+  yaml_body = <<-YAML
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      name: external-secrets
+      namespace: arc-runners
+      annotations:
+        eks.amazonaws.com/role-arn: ${aws_iam_role.eso.arn}
+  YAML
+
+  depends_on = [kubectl_manifest.arc_runners_namespace]
+}
+
 resource "kubectl_manifest" "secret_store" {
   yaml_body = templatefile("${path.module}/../arc-system/secret-store.yaml", {})
 
-  depends_on = [kubectl_manifest.arc_runners_namespace]
+  depends_on = [kubectl_manifest.eso_service_account]
 }
 
 resource "kubectl_manifest" "external_secret" {

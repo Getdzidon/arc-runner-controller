@@ -35,7 +35,7 @@ resource "aws_iam_role" "eso" {
       Action = "sts:AssumeRoleWithWebIdentity"
       Condition = {
         StringEquals = {
-          "${local.oidc_issuer}:sub" = "system:serviceaccount:external-secrets:external-secrets-sa"
+          "${local.oidc_issuer}:sub" = "system:serviceaccount:arc-runners:external-secrets"
           "${local.oidc_issuer}:aud" = "sts.amazonaws.com"
         }
       }
