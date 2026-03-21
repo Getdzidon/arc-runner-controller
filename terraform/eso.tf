@@ -17,6 +17,11 @@ resource "helm_release" "eso" {
   depends_on = [module.node_group]
 }
 
+import {
+  to = helm_release.eso
+  id = "external-secrets/external-secrets"
+}
+
 resource "kubectl_manifest" "secret_store" {
   yaml_body = templatefile("${path.module}/../arc-system/secret-store.yaml", {})
 
