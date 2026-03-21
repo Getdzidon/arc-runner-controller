@@ -22,10 +22,21 @@ resource "time_sleep" "wait_for_eso_crds" {
   depends_on      = [helm_release.eso]
 }
 
+resource "kubectl_manifest" "arc_runners_namespace" {
+  yaml_body = <<-YAML
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: arc-runners
+  YAML
+
+  depends_on = [time_sleep.wait_for_eso_crds]
+}
+
 resource "kubectl_manifest" "secret_store" {
   yaml_body = templatefile("${path.module}/../arc-system/secret-store.yaml", {})
 
-  depends_on = [time_sleep.wait_for_eso_crds]
+  depends_on = [kubectl_manifest.arc_runners_namespace]
 }
 
 resource "kubectl_manifest" "external_secret" {
