@@ -97,3 +97,8 @@ resource "aws_eks_addon" "coredns" {
 
   depends_on = [module.node_group]
 }
+
+import {
+  to = aws_eks_addon.coredns
+  id = "arc-ci-cluster:coredns"
+}
