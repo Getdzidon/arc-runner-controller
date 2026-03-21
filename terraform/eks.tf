@@ -61,16 +61,6 @@ module "eks" {
   }
 }
 
-# One-time imports for existing access entries — remove after successful apply
-import {
-  to = module.eks.aws_eks_access_entry.this["root"]
-  id = "arc-ci-cluster:arn:aws:iam::471112610438:root"
-}
-
-import {
-  to = module.eks.aws_eks_access_entry.this["admin_user"]
-  id = "arc-ci-cluster:arn:aws:iam::471112610438:user/terraform-user"
-}
 
 # ── Managed node group (separate so it waits for add-ons) ───────────────────
 
