@@ -80,6 +80,7 @@ jobs:
 
       - name: Verify rollout
         run: |
-          kubectl rollout status deployment/arc-gha-runner-scale-set-controller \
-            -n arc-system --timeout=120s
+          DEPLOY=$(kubectl get deploy -n arc-system -l app.kubernetes.io/instance=arc -o jsonpath='{.items[0].metadata.name}')
+          echo "Controller deployment: $DEPLOY"
+          kubectl rollout status deployment/"$DEPLOY" -n arc-system --timeout=120s
           kubectl get autoscalingrunnerset -n arc-runners
