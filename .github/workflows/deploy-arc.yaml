@@ -14,6 +14,9 @@ permissions:
   contents: read
   id-token: write      # required for OIDC token exchange with AWS
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   deploy:
     name: Helm deploy ARC
@@ -30,12 +33,12 @@ jobs:
       - name: Configure kubectl
         uses: azure/setup-kubectl@v4
         with:
-          version: "v1.29.0"
+          version: "v1.32.0"
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
         with:
-          version: "v3.14.0"
+          version: "v3.17.0"
 
       - name: Authenticate to AWS via OIDC
         uses: aws-actions/configure-aws-credentials@v6
