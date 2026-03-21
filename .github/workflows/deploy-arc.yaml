@@ -8,7 +8,16 @@ on:
       - "versions.env"
       - "install.sh"
       - ".github/workflows/deploy-arc.yaml"
-  workflow_dispatch:   # allow manual re-deploy
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Action to perform"
+        required: true
+        default: deploy
+        type: choice
+        options:
+          - deploy
+          - destroy
 
 permissions:
   contents: read
@@ -20,7 +29,8 @@ env:
 jobs:
   deploy:
     name: Helm deploy ARC
-    runs-on: ubuntu-latest   # bootstrap uses GitHub-hosted until ARC is up
+    if: github.event_name == 'push' || inputs.action == 'deploy'
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v6
@@ -87,3 +97,49 @@ jobs:
           echo "Controller deployment: $DEPLOY"
           kubectl rollout status deployment/"$DEPLOY" -n arc-system --timeout=120s
           kubectl get autoscalingrunnerset -n arc-runners
+
+  destroy:
+    name: Destroy ARC
+    if: inputs.action == 'destroy'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: "v1.32.0"
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: "v3.17.0"
+
+      - name: Authenticate to AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Configure kubectl for EKS
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ secrets.AWS_REGION }} \
+            --name ${{ secrets.EKS_CLUSTER_NAME }}
+
+      - name: Uninstall runner scale set
+        run: helm uninstall arc-runner-set -n arc-runners --wait --timeout 5m || true
+
+      - name: Uninstall ARC controller
+        run: helm uninstall arc -n arc-system --wait --timeout 5m || true
+
+      - name: Delete namespaces
+        run: |
+          kubectl delete ns arc-runners --ignore-not-found --timeout=60s || true
+          kubectl delete ns arc-system --ignore-not-found --timeout=60s || true
+
+      - name: Verify cleanup
+        run: |
+          echo "Remaining Helm releases:"
+          helm list -A
+          echo "Remaining namespaces:"
+          kubectl get ns

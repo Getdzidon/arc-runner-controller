@@ -498,8 +498,7 @@ There are two pipelines. Which ones run depends on what files you change:
 6. Applies NetworkPolicies (`arc-system/network-policy.yaml`)
 7. Installs the ARC controller via Helm
 8. Installs the runner scale set via Helm
-9. Applies ServiceMonitors (`arc-system/service-monitor.yaml`)
-10. Verifies the rollout
+9. Verifies the rollout (dynamically discovers the controller deployment name)
 
 **Version updates are also automated:**
 - Renovate opens a PR when a new ARC chart version is released → merge the PR → pipeline deploys the new version
@@ -621,16 +620,9 @@ To change limits, edit `arc-system/arc-runner-scale-set-values.yaml` and push to
 
 ---
 
-## Storage class by cloud provider
+## Storage
 
-Edit `storageClassName` in `arc-system/arc-runner-scale-set-values.yaml`:
-
-| Provider | storageClassName |
-|----------|-----------------|
-| EKS | `gp2` or `gp3` |
-| GKE | `standard` |
-| AKS | `default` |
-| kind / local | `standard` |
+Runners use the default mode (no `containerMode`) — each job runs directly in the runner container. No persistent volumes or storage classes are needed. Runner pods are ephemeral and destroyed after each job.
 
 ---
 
@@ -724,7 +716,21 @@ Most common cause: `arc-github-app-secret` is missing or in the wrong namespace.
 ```bash
 kubectl logs -n arc-runners -l app.kubernetes.io/name=arc-runner-set
 ```
-Check that `githubConfigUrl` matches the exact org/repo URL and the GitHub App is installed there.
+Check that `githubConfigUrl` points to a specific **repository** (e.g. `https://github.com/user/repo`), not a user account URL. GitHub's runner registration API returns 404 for user-level URLs.
+
+**Runner pods stuck in Pending or CrashLoopBackOff with IP errors**
+```bash
+kubectl get events -n arc-runners --field-selector reason=FailedCreatePodSandBox
+```
+If you see `failed to assign an IP address to container`, the vpc-cni has exhausted available IPs. This can happen after crash loops leave stale ENI allocations. Fix: restart the vpc-cni daemonset:
+```bash
+kubectl rollout restart daemonset/aws-node -n kube-system
+kubectl delete ephemeralrunner --all -n arc-runners
+```
+
+**ESO SecretStore: "ServiceAccount not found"**
+
+The SecretStore references a service account for IRSA auth. This SA must exist in the **same namespace** as the SecretStore (namespace-scoped). The ESO Helm chart creates its SA in the `external-secrets` namespace, not `arc-runners`. Terraform creates a dedicated SA with the IRSA annotation in `arc-runners` to solve this.
 
 **Secret not found**
 ```bash
@@ -829,6 +835,9 @@ time_sleep.wait_for_eso_crds (30s for CRD registration)
 kubectl_manifest.arc_runners_namespace
         │
         ▼
+kubectl_manifest.eso_service_account (IRSA-annotated SA in arc-runners)
+        │
+        ▼
 kubectl_manifest.secret_store
         │
         ▼
@@ -841,6 +850,7 @@ Key points:
 - The node group is a separate sub-module (`eks-managed-node-group`) so it waits for add-ons
 - ESO CRDs take ~30s to register after the Helm release completes
 - The `arc-runners` namespace must be created before any resources that target it
+- The ESO service account must be created in `arc-runners` (where the SecretStore lives) with the IRSA annotation — the Helm-installed SA lives in `external-secrets` and can't be referenced cross-namespace by a namespace-scoped SecretStore
 
 ---
 
