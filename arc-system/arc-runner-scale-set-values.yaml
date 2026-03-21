@@ -17,7 +17,6 @@ maxRunners: 10
 ## Runner pod template
 template:
   spec:
-    # Use the least-privilege ServiceAccount defined in rbac.yaml
     serviceAccountName: arc-runner-sa
     containers:
       - name: runner
@@ -32,18 +31,13 @@ template:
         env:
           - name: ACTIONS_RUNNER_REQUIRE_JOB_CONTAINER
             value: "false"
+        volumeMounts:
+          - name: work
+            mountPath: /_work
+    volumes:
+      - name: work
+        emptyDir: {}
 
-## Use Kubernetes jobs (ephemeral runners — one job per pod)
+## Ephemeral runners — no persistent storage needed
 containerMode:
   type: "kubernetes"
-  kubernetesModeWorkVolumeClaim:
-    accessModes: ["ReadWriteOnce"]
-    # storageClassName per cloud provider:
-    #   GKE      → standard
-    #   EKS      → gp2  (or gp3 with a custom StorageClass)
-    #   AKS      → default
-    #   kind/local → standard
-    storageClassName: "gp2"
-    resources:
-      requests:
-        storage: 1Gi
