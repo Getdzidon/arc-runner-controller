@@ -31,13 +31,3 @@ template:
         env:
           - name: ACTIONS_RUNNER_REQUIRE_JOB_CONTAINER
             value: "false"
-        volumeMounts:
-          - name: work
-            mountPath: /_work
-    volumes:
-      - name: work
-        emptyDir: {}
-
-## Ephemeral runners — no persistent storage needed
-containerMode:
-  type: "kubernetes"
