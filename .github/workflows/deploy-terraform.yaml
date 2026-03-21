@@ -42,12 +42,6 @@ jobs:
           role-to-assume: ${{ secrets.AWS_IAM_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Clean up orphaned Helm releases
-        if: ${{ github.event.inputs.action != 'destroy' }}
-        run: |
-          aws eks update-kubeconfig --name arc-ci-cluster --region ${{ secrets.AWS_REGION }} || true
-          helm uninstall external-secrets -n external-secrets 2>/dev/null || true
-
       - name: Terraform Init
         run: terraform init
 
