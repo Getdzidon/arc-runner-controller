@@ -46,21 +46,36 @@ module "eks" {
   # EKS-managed cluster security group which already trusts itself.
   create_node_security_group = false
 
-  eks_managed_node_groups = {
-    default = {
-      instance_types = [var.node_instance_type]
+  enable_cluster_creator_admin_permissions = true
+}
 
-      min_size     = 1
-      max_size     = 3
-      desired_size = 2
+# ── Managed node group (separate so it waits for add-ons) ───────────────────
 
-      iam_role_additional_policies = {
-        AmazonEKSWorkerNodePolicy          = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
-        AmazonEC2ContainerRegistryReadOnly = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
-        AmazonEKS_CNI_Policy               = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
-      }
-    }
+module "node_group" {
+  source  = "terraform-aws-modules/eks/aws//modules/eks-managed-node-group"
+  version = "~> 21.15"
+
+  name            = "default"
+  cluster_name    = module.eks.cluster_name
+  cluster_version = module.eks.cluster_version
+  subnet_ids      = module.vpc.private_subnets
+
+  cluster_primary_security_group_id = module.eks.cluster_primary_security_group_id
+  cluster_service_cidr              = module.eks.cluster_service_cidr
+
+  # No separate node SG — use the cluster's
+  create_security_group = false
+
+  instance_types = [var.node_instance_type]
+  min_size       = 1
+  max_size       = 3
+  desired_size   = 2
+
+  iam_role_additional_policies = {
+    AmazonEKSWorkerNodePolicy          = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+    AmazonEC2ContainerRegistryReadOnly = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+    AmazonEKS_CNI_Policy               = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
   }
 
-  enable_cluster_creator_admin_permissions = true
+  depends_on = [module.eks]
 }
