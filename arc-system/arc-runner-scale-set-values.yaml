@@ -2,7 +2,7 @@
 # Chart: oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
 
 ## GitHub target — getdzidon's account
-githubConfigUrl: "https://github.com/getdzidon"
+githubConfigUrl: "https://github.com/Getdzidon/arc-runner-controller"
 
 ## Reference the GitHub App secret created by install.sh
 githubConfigSecret: arc-github-app-secret
