@@ -1,4 +1,4 @@
-name: Terraform Infrastructure
+name: Deploy ARC Infrastructure
 
 on:
   push:
