@@ -46,6 +46,40 @@ module "eks" {
   create_node_security_group = false
 
   enable_cluster_creator_admin_permissions = true
+
+  access_entries = {
+    # Allow the root account to view cluster resources in the AWS console
+    root = {
+      principal_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+      policy_associations = {
+        admin = {
+          policy_arn = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+          access_scope = { type = "cluster" }
+        }
+      }
+    }
+    # Allow the local IAM user to run kubectl and manage the cluster
+    admin_user = {
+      principal_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/${var.cluster_admin_username}"
+      policy_associations = {
+        admin = {
+          policy_arn = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+          access_scope = { type = "cluster" }
+        }
+      }
+    }
+  }
+}
+
+# One-time imports for existing access entries — remove after successful apply
+import {
+  to = module.eks.aws_eks_access_entry.this["root"]
+  id = "arc-ci-cluster:arn:aws:iam::471112610438:root"
+}
+
+import {
+  to = module.eks.aws_eks_access_entry.this["admin_user"]
+  id = "arc-ci-cluster:arn:aws:iam::471112610438:user/terraform-user"
 }
 
 # ── Managed node group (separate so it waits for add-ons) ───────────────────
@@ -54,7 +88,7 @@ module "node_group" {
   source  = "terraform-aws-modules/eks/aws//modules/eks-managed-node-group"
   version = "~> 21.15"
 
-  name               = "default"
+  name               = "${var.cluster_name}-ng"
   cluster_name       = module.eks.cluster_name
   kubernetes_version = module.eks.cluster_version
   subnet_ids         = module.vpc.private_subnets

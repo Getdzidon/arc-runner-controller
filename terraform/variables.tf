@@ -7,7 +7,6 @@ variable "aws_region" {
 variable "cluster_name" {
   description = "EKS cluster name"
   type        = string
-  default     = "arc-ci-cluster"
 }
 
 variable "node_instance_type" {
@@ -32,4 +31,9 @@ variable "github_app_private_key" {
   description = "GitHub App private key PEM content (from Step 1)"
   type        = string
   sensitive   = true
+}
+
+variable "cluster_admin_username" {
+  description = "IAM username to grant EKS cluster admin access"
+  type        = string
 }

@@ -38,10 +38,10 @@ arc-runner-controller/
 ├── terraform/
 │   ├── providers.tf                      # Terraform block, backend, provider configs
 │   ├── vpc.tf                            # VPC module
-│   ├── eks.tf                            # EKS module + data sources
+│   ├── eks.tf                            # EKS module, node group, add-ons (vpc-cni, kube-proxy, coredns)
 │   ├── iam.tf                            # ESO IRSA role + policy
 │   ├── secrets.tf                        # AWS Secrets Manager
-│   ├── eso.tf                            # ESO Helm release + SecretStore + ExternalSecret
+│   ├── eso.tf                            # ESO Helm release, CRD wait, namespace, SecretStore, ExternalSecret
 │   ├── variables.tf                      # Input variables
 │   ├── outputs.tf                        # Outputs: cluster name, role ARN, region
 │   └── terraform.tfvars                  # Your values — blocked by .gitignore, never commit
@@ -442,6 +442,8 @@ The `deploy-terraform.yaml` pipeline runs Terraform automatically when changes a
 |--------|-------|
 | `AWS_IAM_ROLE_ARN` | The OIDC role ARN from Step 2 — used by both the Terraform and ARC deploy pipelines |
 | `AWS_REGION` | e.g. `eu-central-1` |
+| `EKS_CLUSTER_NAME` | e.g. `arc-ci-cluster` |
+| `CLUSTER_ADMIN_USERNAME` | IAM username to grant EKS cluster admin access, e.g. `terraform-user` |
 | `APP_ID` | App ID from Step 1 |
 | `APP_INSTALLATION_ID` | Installation ID from Step 1 |
 | `APP_PRIVATE_KEY` | Full PEM content of the private key from Step 1 |
@@ -730,6 +732,60 @@ kubectl get secret arc-github-app-secret -n arc-runners
 ```
 The secret must be in `arc-runners`, not `arc-system`.
 
+**EKS console shows "No Nodes" or kubectl returns "provide credentials"**
+
+EKS has its own access control separate from IAM. Even the root account needs an explicit access entry to view cluster resources. Terraform manages this via `access_entries` in the EKS module, but if you destroy and recreate the cluster manually, you need to re-add them:
+```bash
+aws eks create-access-entry --cluster-name arc-ci-cluster \
+  --principal-arn arn:aws:iam::<ACCOUNT_ID>:root --region eu-central-1
+aws eks associate-access-policy --cluster-name arc-ci-cluster \
+  --principal-arn arn:aws:iam::<ACCOUNT_ID>:root \
+  --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
+  --access-scope type=cluster --region eu-central-1
+```
+
+**Node group CREATE_FAILED: Unhealthy nodes in the kubernetes cluster**
+
+This is almost always caused by missing EKS add-ons. The EKS Terraform module (`terraform-aws-modules/eks/aws` ~> 21.x) does **not** install add-ons by default. Without `vpc-cni`, nodes register but the CNI never initializes → `NetworkReady=false` → nodes stay `NotReady` → EKS reports "unhealthy" after a 33-minute timeout.
+
+Diagnose:
+```bash
+aws eks update-kubeconfig --name arc-ci-cluster --region eu-central-1
+kubectl get nodes                    # shows NotReady with "cni plugin not initialized"
+kubectl get pods -n kube-system      # empty = no add-ons installed
+aws eks list-addons --cluster-name arc-ci-cluster   # empty array confirms it
+```
+
+Fix: add `addons` block to the EKS module (note: the argument is `addons`, not `cluster_addons`):
+```hcl
+addons = {
+  "vpc-cni"    = { most_recent = true }
+  "kube-proxy" = { most_recent = true }
+}
+```
+
+CoreDNS must be installed **after** the node group (it needs nodes to schedule pods on). See the Terraform deployment order section below.
+
+**CoreDNS stuck in Degraded state**
+
+CoreDNS requires nodes to schedule its pods. If installed at the same time as the node group, it will stay `Degraded` until the 20-minute Terraform timeout, then fail. Solution: install CoreDNS as a separate `aws_eks_addon` resource with `depends_on` pointing to the node group.
+
+**Terraform: "Addon already exists" or "cannot re-use a name that is still in use"**
+
+This happens when a previous apply partially succeeded — the resource was created in AWS/Kubernetes but Terraform errored before recording it in state. Options:
+- Use a Terraform `import` block to adopt the existing resource
+- Or destroy everything and apply fresh (faster when multiple resources are orphaned)
+
+**ESO SecretStore: "resource is not valid for cluster"**
+
+Two possible causes:
+1. The ESO CRDs haven't finished registering yet — add a `time_sleep` (30s) between the ESO Helm release and the SecretStore resource
+2. The API version is wrong — latest ESO uses `external-secrets.io/v1`, not `v1beta1`
+
+**ESO SecretStore: "namespace not found"**
+
+The `arc-runners` namespace must exist before the SecretStore can be created in it. Terraform must create the namespace explicitly before applying the SecretStore manifest.
+
 **NetworkPolicy blocking runner traffic**
 ```bash
 kubectl describe networkpolicy -n arc-runners
@@ -750,7 +806,51 @@ Ensure the `release: prometheus` label matches your Prometheus Operator's `servi
 
 ---
 
+## Terraform deployment order
+
+The EKS Terraform module creates add-ons and node groups in parallel by default, which causes failures. This project splits them into separate resources with explicit dependencies:
+
+```
+module.eks (cluster + vpc-cni + kube-proxy)
+        │
+        ▼
+module.node_group (nodes come up with CNI ready → Ready state)
+        │
+        ▼
+aws_eks_addon.coredns (pods schedule onto healthy nodes → Active)
+        │
+        ▼
+helm_release.eso (External Secrets Operator)
+        │
+        ▼
+time_sleep.wait_for_eso_crds (30s for CRD registration)
+        │
+        ▼
+kubectl_manifest.arc_runners_namespace
+        │
+        ▼
+kubectl_manifest.secret_store
+        │
+        ▼
+kubectl_manifest.external_secret
+```
+
+Key points:
+- `vpc-cni` and `kube-proxy` go Active without nodes — safe to include in the EKS module
+- `coredns` needs nodes — must be a separate resource that depends on the node group
+- The node group is a separate sub-module (`eks-managed-node-group`) so it waits for add-ons
+- ESO CRDs take ~30s to register after the Helm release completes
+- The `arc-runners` namespace must be created before any resources that target it
+
+---
+
 ## Uninstall
+
+**If using Terraform (Option D):**
+
+Run the `deploy-terraform.yaml` pipeline with the `destroy` action via workflow dispatch. This tears down everything in the correct order.
+
+**If using manual setup (Options A/B/C):**
 
 ```bash
 helm uninstall arc-runner-set -n arc-runners
@@ -760,3 +860,5 @@ kubectl delete -f arc-system/network-policy.yaml
 kubectl delete -f arc-system/service-monitor.yaml
 kubectl delete namespace arc-runners arc-system
 ```
+
+> **Note:** If a Terraform apply partially fails, you may end up with orphaned resources (created in AWS but not tracked in Terraform state). In that case, a full `destroy` + `apply` is the cleanest recovery path rather than trying to import each orphaned resource individually.
