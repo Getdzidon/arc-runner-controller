@@ -41,7 +41,7 @@ jobs:
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v4
         with:
-          terraform_version: "1.7.0"
+          terraform_version: "1.12.0"
 
       - name: Authenticate to AWS via OIDC
         uses: aws-actions/configure-aws-credentials@v6
