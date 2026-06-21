@@ -9,10 +9,15 @@ GitHub account: **getdzidon** — `https://github.com/getdzidon`
 ## How it works
 
 ```
-Manual steps (one-time)  →  push to main  →  deploy-arc.yaml runs  →  ARC is live
+Manual steps (one-time)  →  push to main  →  deploy-terraform.yaml  →  deploy-arc.yaml  →  ARC is live
 ```
 
-Once the manual steps below are done and the code is pushed to `main`, the `deploy-arc.yaml` pipeline fully deploys ARC automatically — no further intervention needed.
+Two pipelines run in sequence after the one-time manual steps:
+
+1. `deploy-terraform.yaml` — provisions all AWS infrastructure via Terraform (VPC, EKS, IAM, Secrets Manager, ESO, SecretStore, ExternalSecret)
+2. `deploy-arc.yaml` — installs the ARC controller and runner scale set onto the cluster via Helm
+
+Once both complete, runners are live and any repo under `getdzidon` org can use `runs-on: arc-runner-set`.
 
 ---
 
@@ -22,9 +27,9 @@ Once the manual steps below are done and the code is pushed to `main`, the `depl
 arc-runner-controller/
 ├── .github/
 │   ├── workflows/
-│   │   ├── deploy-terraform.yaml         # Pipeline — provisions AWS infra + EKS via Terraform (Option D)
-│   │   ├── deploy-arc.yaml               # Pipeline — deploys ARC onto the cluster (automated)
-│   │   └── example-arc-job.yaml          # CI pipeline that runs ON ARC runners
+│   │   ├── deploy-terraform.yaml         # Pipeline — provisions AWS infra + EKS via Terraform
+│   │   ├── deploy-arc.yaml               # Pipeline — deploys ARC onto the cluster
+│   │   └── test-arc-runners.yaml          # CI pipeline that runs ON ARC runners
 │   └── dependabot.yml
 ├── arc-system/
 │   ├── arc-controller-values.yaml        # Helm values for the ARC controller
@@ -32,20 +37,20 @@ arc-runner-controller/
 │   ├── rbac.yaml                         # ServiceAccount, Role, RoleBinding
 │   ├── network-policy.yaml               # NetworkPolicies for runner isolation
 │   ├── service-monitor.yaml              # Prometheus ServiceMonitors
-│   ├── secret-store.yaml                 # ESO SecretStore (Options C and D)
-│   ├── external-secret.yaml              # ESO ExternalSecret (Options C and D)
+│   ├── secret-store.yaml                 # ESO SecretStore (applied by Terraform)
+│   ├── external-secret.yaml              # ESO ExternalSecret (applied by Terraform)
 │   └── github-app-secret.yaml.tpl        # Secret shape reference — never commit real values
 ├── terraform/
-│   ├── providers.tf                      # Terraform block, backend, provider configs
-│   ├── vpc.tf                            # VPC module
-│   ├── eks.tf                            # EKS module, node group, add-ons (vpc-cni, kube-proxy, coredns)
-│   ├── iam.tf                            # ESO IRSA role + policy
-│   ├── secrets.tf                        # AWS Secrets Manager
-│   ├── eso.tf                            # ESO Helm release, CRD wait, namespace, SecretStore, ExternalSecret
+│   ├── providers.tf                      # Terraform block, S3 backend, AWS/Helm/kubectl providers
+│   ├── vpc.tf                            # VPC: 10.0.0.0/16, 2 AZs, private + public subnets, NAT
+│   ├── eks.tf                            # EKS 1.35, managed node group (t3.medium), vpc-cni, kube-proxy, coredns
+│   ├── iam.tf                            # ESO IRSA role (ESO-ARC-Role) + policy
+│   ├── secrets.tf                        # AWS Secrets Manager secret (arc/github-app-secret)
+│   ├── eso.tf                            # ESO Helm release, CRD wait, namespace, ServiceAccount, SecretStore, ExternalSecret
 │   ├── variables.tf                      # Input variables
-│   ├── outputs.tf                        # Outputs: cluster name, role ARN, region
+│   ├── outputs.tf                        # Outputs: cluster name, region
 │   └── terraform.tfvars                  # Your values — blocked by .gitignore, never commit
-├── versions.env                          # Pinned chart versions (updated by Renovate)
+├── versions.env                          # Pinned ARC chart version (updated by Renovate)
 ├── renovate.json                         # Automated dependency update config
 ├── install.sh                            # Local bootstrap script (alternative to the pipeline)
 ├── .gitignore
@@ -58,19 +63,14 @@ arc-runner-controller/
 
 | Tool | Version | Install |
 |------|---------|---------|
-| kubectl | ≥ 1.26 | [docs](https://kubernetes.io/docs/tasks/tools/) |
-| helm | ≥ 3.12 | [docs](https://helm.sh/docs/intro/install/) |
-| Kubernetes cluster | ≥ 1.26 | e.g. EKS, GKE, AKS, kind — **see note below** |
 | aws cli | ≥ 2.x | [docs](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html) |
-| terraform | ≥ 1.6 | [docs](https://developer.hashicorp.com/terraform/install) — only needed for Option D |
+| terraform | ≥ 1.6 | [docs](https://developer.hashicorp.com/terraform/install) |
 
-> **Kubernetes cluster:** ARC requires a running Kubernetes cluster. If you do not have one, Step 3 includes instructions to create one manually via the AWS CLI, or you can use **Option D** to provision everything via Terraform.
+> Everything else (kubectl, helm, EKS cluster) is provisioned automatically by Terraform and the pipelines.
 
 ---
 
-## ⚠️ Manual steps — do these first, in order
-
-Complete all of them before pushing to `main`.
+## ⚠️ Manual steps — do these once, in order, before pushing to `main`
 
 ---
 
@@ -87,8 +87,7 @@ Complete all of them before pushing to `main`.
    - `Checks` → Read & Write
    - `Metadata` → Read-only
 4. Under **Where can this GitHub App be installed?** select *Only on this account*
-5. Click **Create GitHub App**
-6. Note the `App ID` shown at the top of the next page
+5. Click **Create GitHub App** — note the `App ID` at the top of the next page
 
 **Generate a private key:**
 
@@ -97,24 +96,18 @@ Complete all of them before pushing to `main`.
 
 **Install the App and get the Installation ID:**
 
-1. In the left sidebar click **Install App** → click **Install** next to your account
+1. Left sidebar → **Install App** → **Install** next to your account
 2. Choose *All repositories* or select specific repos → click **Install**
-3. After install you are redirected to:
-   `https://github.com/settings/installations/<INSTALLATION_ID>`
+3. After install you are redirected to `https://github.com/settings/installations/<INSTALLATION_ID>`
 4. Note the number at the end — that is your `Installation ID`
 
-You now have three values you will need in the steps below:
-- `APP_ID`
-- `INSTALLATION_ID`
-- `/path/to/private-key.pem`
+You now have: `APP_ID`, `INSTALLATION_ID`, `/path/to/private-key.pem`
 
 ---
 
 ### 🟢 Step 2 — Create the GitHub Actions OIDC provider and IAM role
 
-The deploy pipelines authenticate to AWS via OIDC — no static credentials. The OIDC provider must exist in your AWS account before anything else can run — both the `deploy-arc.yaml` pipeline and Terraform (Option D) depend on it.
-
-> ⚠️ **Step 2 is required regardless of which option you choose in Step 3.** Options A, B, and C do not use OIDC directly, but the deploy pipelines (`deploy-arc.yaml` and `deploy-terraform.yaml`) authenticate to AWS via this OIDC role. Option D additionally requires the OIDC provider to exist because Terraform references it via a `data` source.
+The deploy pipelines authenticate to AWS via OIDC — no static credentials. The OIDC provider must exist in your AWS account before anything else can run — both the `deploy-arc.yaml` pipeline and Terraform depend on it.
 
 ```bash
 # 1. Add GitHub OIDC provider to AWS (one time per account)
@@ -149,7 +142,7 @@ aws iam create-role \
   --role-name github-actions-arc-role \
   --assume-role-policy-document file:///tmp/github-oidc-trust.json
 
-# 4. Attach EKS access
+# 4. Attach permissions (EKS, EC2, IAM, Secrets Manager needed for Terraform)
 aws iam attach-role-policy \
   --role-name github-actions-arc-role \
   --policy-arn arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
@@ -159,310 +152,48 @@ Note the role ARN — you need it in Step 4.
 
 ---
 
-### 🟡 Step 3 — Provision the cluster and create the Kubernetes secret
+### 🟠 Step 3 — Create the S3 bucket for Terraform remote state if you do not have one
 
-The deploy pipeline assumes a running Kubernetes cluster with `arc-github-app-secret` already in the `arc-runners` namespace. It does not create either. You must set them up once before the first deploy.
-
-**If you already have a Kubernetes cluster**, skip straight to the option that suits you (A, B, or C).
-
-**If you do not have a cluster yet**, either:
-- Create one manually using the instructions below, then use Option A, B, or C for the secret
-- Or use **Option D** which provisions the cluster AND the secret via Terraform in one shot
-
----
-
-#### 🟡 Create an EKS cluster manually (skip if you already have one, or if using Option D)
+Terraform stores state in S3. The bucket must exist before `terraform init` can run.
 
 ```bash
-# 1. Create a VPC (or use an existing one)
-#    You need at least 2 private subnets in different AZs for EKS.
-#    The easiest way is via the AWS Console:
-#    VPC → Create VPC → "VPC and more" → 2 AZs, 2 private + 2 public subnets, 1 NAT gateway
-
-# 2. Create the EKS cluster
-aws eks create-cluster \
-  --name arc-ci-cluster \
+aws s3api create-bucket \
+  --bucket <YOUR_BUCKET_NAME> \
   --region eu-central-1 \
-  --kubernetes-version 1.35 \
-  --role-arn arn:aws:iam::<ACCOUNT_ID>:role/<EKS_CLUSTER_ROLE> \
-  --resources-vpc-config subnetIds=<PRIVATE_SUBNET_1>,<PRIVATE_SUBNET_2>,endpointPublicAccess=true
+  --create-bucket-configuration LocationConstraint=eu-central-1
 
-# Wait for the cluster to become ACTIVE (~10 min)
-aws eks wait cluster-active --name arc-ci-cluster --region eu-central-1
-
-# 3. Create a node IAM role
-aws iam create-role --role-name arc-ci-cluster-node-group \
-  --assume-role-policy-document '{
-    "Version": "2012-10-17",
-    "Statement": [{
-      "Effect": "Allow",
-      "Principal": { "Service": "ec2.amazonaws.com" },
-      "Action": "sts:AssumeRole"
-    }]
-  }'
-
-aws iam attach-role-policy --role-name arc-ci-cluster-node-group \
-  --policy-arn arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
-aws iam attach-role-policy --role-name arc-ci-cluster-node-group \
-  --policy-arn arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
-aws iam attach-role-policy --role-name arc-ci-cluster-node-group \
-  --policy-arn arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
-
-# 4. Create a managed node group
-aws eks create-nodegroup \
-  --cluster-name arc-ci-cluster \
-  --nodegroup-name default \
-  --node-role arn:aws:iam::<ACCOUNT_ID>:role/arc-ci-cluster-node-group \
-  --subnets <PRIVATE_SUBNET_1> <PRIVATE_SUBNET_2> \
-  --instance-types t3.medium \
-  --scaling-config minSize=1,maxSize=3,desiredSize=2 \
-  --region eu-central-1
-
-# Wait for the node group to become ACTIVE (~15-25 min)
-aws eks wait nodegroup-active \
-  --cluster-name arc-ci-cluster --nodegroup-name default --region eu-central-1
-
-# 5. Configure kubectl
-aws eks update-kubeconfig --name arc-ci-cluster --region eu-central-1
+aws s3api put-bucket-versioning \
+  --bucket <YOUR_BUCKET_NAME> \
+  --versioning-configuration Status=Enabled
 ```
 
-> **Note:** The `<EKS_CLUSTER_ROLE>` is a separate IAM role that EKS assumes to manage the cluster. If you don't have one, create it with the `AmazonEKSClusterPolicy` attached and a trust policy for `eks.amazonaws.com`. See the [EKS docs](https://docs.aws.amazon.com/eks/latest/userguide/service_IAM_role.html).
+Then update `terraform/providers.tf` with your bucket name:
 
-Once the cluster is running, choose one of the options below to create the secret.
-
----
-
-#### 🟡 Option A — kubectl (quick, local dev)
-
-```bash
-kubectl create namespace arc-runners
-
-kubectl create secret generic arc-github-app-secret \
-  --namespace arc-runners \
-  --from-literal=github_app_id=<APP_ID> \
-  --from-literal=github_app_installation_id=<INSTALLATION_ID> \
-  --from-file=github_app_private_key=/path/to/private-key.pem
-```
-
-Verify:
-
-```bash
-kubectl get secret arc-github-app-secret -n arc-runners
-```
-
----
-
-#### 🟡 Option B — Sealed Secrets (GitOps-safe, recommended for teams)
-
-Sealed Secrets encrypts the secret so it is safe to commit to Git.
-
-**Install the controller:**
-
-```bash
-helm repo add sealed-secrets https://bitnami-labs.github.io/sealed-secrets
-helm repo update
-helm upgrade --install sealed-secrets sealed-secrets/sealed-secrets \
-  --namespace kube-system --wait
-```
-
-**Install the kubeseal CLI:**
-
-```powershell
-# Windows (winget)
-winget install bitnami.kubeseal
-
-# Windows (Chocolatey)
-choco install kubeseal
-
-# Windows (manual)
-$VERSION = "0.26.0"
-Invoke-WebRequest -Uri "https://github.com/bitnami-labs/sealed-secrets/releases/download/v$VERSION/kubeseal-$VERSION-windows-amd64.tar.gz" -OutFile kubeseal.tar.gz
-tar -xzf kubeseal.tar.gz kubeseal.exe
-Move-Item kubeseal.exe C:\Windows\System32\kubeseal.exe   # or any directory on your PATH
-```
-
-```bash
-# macOS
-brew install kubeseal
-
-# Linux
-KUBESEAL_VERSION=0.26.0
-wget "https://github.com/bitnami-labs/sealed-secrets/releases/download/v${KUBESEAL_VERSION}/kubeseal-${KUBESEAL_VERSION}-linux-amd64.tar.gz"
-tar -xvzf kubeseal-*.tar.gz kubeseal
-sudo mv kubeseal /usr/local/bin/
-```
-
-**Seal and apply:**
-
-```bash
-kubectl create namespace arc-runners
-
-# Generate plain secret — DO NOT commit this file
-kubectl create secret generic arc-github-app-secret \
-  --namespace arc-runners \
-  --from-literal=github_app_id=<APP_ID> \
-  --from-literal=github_app_installation_id=<INSTALLATION_ID> \
-  --from-file=github_app_private_key=/path/to/private-key.pem \
-  --dry-run=client -o yaml > /tmp/arc-secret.yaml
-
-# Encrypt — this file IS safe to commit
-kubeseal --format yaml < /tmp/arc-secret.yaml > arc-system/arc-github-app-sealed-secret.yaml
-
-# Apply and clean up
-kubectl apply -f arc-system/arc-github-app-sealed-secret.yaml
-rm /tmp/arc-secret.yaml
-
-# Verify the controller decrypted it
-kubectl get secret arc-github-app-secret -n arc-runners
-```
-
----
-
-#### 🟡 Option C — External Secrets Operator + AWS Secrets Manager (production)
-
-Secrets live in AWS Secrets Manager; ESO syncs them into Kubernetes automatically.
-
-**Store the secret in AWS:**
-
-```bash
-PEM_CONTENT=$(awk 'NF {sub(/\r/, ""); printf "%s\\n",$0;}' /path/to/private-key.pem)
-
-aws secretsmanager create-secret \
-  --name arc/github-app \
-  --region eu-central-1 \
-  --secret-string "{
-    \"github_app_id\": \"<APP_ID>\",
-    \"github_app_installation_id\": \"<INSTALLATION_ID>\",
-    \"github_app_private_key\": \"${PEM_CONTENT}\"
-  }"
-```
-
-**Create an IAM role for ESO (IRSA):**
-
-```bash
-# Get your cluster OIDC issuer
-aws eks describe-cluster --name <CLUSTER_NAME> --region <REGION> \
-  --query "cluster.identity.oidc.issuer" --output text
-
-# Create IAM policy
-cat > /tmp/eso-policy.json <<EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Action": ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"],
-    "Resource": "arn:aws:secretsmanager:eu-central-1:<ACCOUNT_ID>:secret:arc/github-app*"
-  }]
+```hcl
+backend "s3" {
+  bucket = "<YOUR_BUCKET_NAME>"
+  key    = "arc-runner-controller/terraform.tfstate"
+  region = "eu-central-1"
 }
-EOF
-
-aws iam create-policy \
-  --policy-name ESO-ARC-SecretsPolicy \
-  --policy-document file:///tmp/eso-policy.json
-
-# Create IAM role with OIDC trust
-cat > /tmp/eso-trust.json <<EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Principal": { "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/<CLUSTER_OIDC>" },
-    "Action": "sts:AssumeRoleWithWebIdentity",
-    "Condition": {
-      "StringEquals": {
-        "<CLUSTER_OIDC>:sub": "system:serviceaccount:external-secrets:external-secrets-sa",
-        "<CLUSTER_OIDC>:aud": "sts.amazonaws.com"
-      }
-    }
-  }]
-}
-EOF
-
-aws iam create-role --role-name ESO-ARC-Role \
-  --assume-role-policy-document file:///tmp/eso-trust.json
-
-aws iam attach-role-policy --role-name ESO-ARC-Role \
-  --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/ESO-ARC-SecretsPolicy
 ```
 
-**Install ESO:**
-
-```bash
-helm repo add external-secrets https://charts.external-secrets.io
-helm repo update
-helm upgrade --install external-secrets external-secrets/external-secrets \
-  --namespace external-secrets --create-namespace \
-  --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=arn:aws:iam::<ACCOUNT_ID>:role/ESO-ARC-Role \
-  --wait
-```
-
-**Apply the SecretStore and ExternalSecret:**
-
-```bash
-kubectl apply -f arc-system/secret-store.yaml
-kubectl apply -f arc-system/external-secret.yaml
-
-# Verify — STATUS should show SecretSynced
-kubectl get externalsecret arc-github-app-secret -n arc-runners
-kubectl get secret arc-github-app-secret -n arc-runners
-```
+The bucket name in this repo is `deebest-tf-state-bucket` — replace it with your own.
 
 ---
 
-#### 🟡 Option D — Terraform (provisions everything: EKS cluster + IAM + secrets + ESO)
-
-Use this option if you want all AWS infrastructure managed as code. Requires Step 2 (OIDC provider) to be completed first. Skip the manual cluster creation above — Terraform handles it.
-
-Terraform will create:
-- VPC with public and private subnets
-- EKS cluster (Kubernetes 1.35, t3.medium nodes)
-- EKS OIDC provider and IAM role for ESO (`ESO-ARC-Role`)
-- AWS Secrets Manager secret (`arc/github-app`) with your GitHub App credentials
-- External Secrets Operator installed via Helm
-- `SecretStore` and `ExternalSecret` applied to the cluster
-
-**Before running Terraform, update** the `backend "s3"` block in `terraform/providers.tf` with your S3 bucket name and region for remote state.
-
-**Option 1 — Run Terraform locally:**
-
-```bash
-cd terraform
-
-# Edit terraform.tfvars with your APP_ID, INSTALLATION_ID, and PEM content
-terraform init
-terraform plan
-terraform apply
-```
-
-**Option 2 — Run via the pipeline:**
-
-The `deploy-terraform.yaml` pipeline runs Terraform automatically when changes are pushed to `terraform/**`. Before pushing, set these GitHub Actions secrets:
-
-| Secret | Value |
-|--------|-------|
-| `AWS_IAM_ROLE_ARN` | The OIDC role ARN from Step 2 — used by both the Terraform and ARC deploy pipelines |
-| `AWS_REGION` | e.g. `eu-central-1` |
-| `EKS_CLUSTER_NAME` | e.g. `arc-ci-cluster` |
-| `CLUSTER_ADMIN_USERNAME` | IAM username to grant EKS cluster admin access, e.g. `terraform-user` |
-| `APP_ID` | App ID from Step 1 |
-| `APP_INSTALLATION_ID` | Installation ID from Step 1 |
-| `APP_PRIVATE_KEY` | Full PEM content of the private key from Step 1 |
-
-> **Note:** The OIDC role from Step 2 needs broad permissions (EKS, EC2, IAM, Secrets Manager) to create infrastructure via Terraform.
-
-**After `terraform apply` completes**, the outputs (cluster name, region) are printed automatically — use them for the GitHub Actions secrets in Step 4.
-
----
-
-### 🟠 Step 4 — Set GitHub Actions secrets
+### 🟡 Step 4 — Set GitHub Actions secrets
 
 Go to **GitHub → your repo → Settings → Secrets and variables → Actions → New repository secret** and add:
 
 | Secret | Value |
 |--------|-------|
-| `AWS_IAM_ROLE_ARN` | ARN of the role created in Step 2, e.g. `arn:aws:iam::<ACCOUNT_ID>:role/github-actions-arc-role` |
-| `AWS_REGION` | e.g. `eu-central-1` |
-| `EKS_CLUSTER_NAME` | Your EKS cluster name |
+| `AWS_IAM_ROLE_ARN` | ARN of the role from Step 2, e.g. `arn:aws:iam::<ACCOUNT_ID>:role/github-actions-arc-role` |
+| `AWS_REGION` | `eu-central-1` |
+| `EKS_CLUSTER_NAME` | Your desired cluster name, e.g. `arc-ci-cluster` |
+| `CLUSTER_ADMIN_USERNAME` | Your IAM username, e.g. `terraform-user` |
+| `APP_ID` | App ID from Step 1 |
+| `APP_INSTALLATION_ID` | Installation ID from Step 1 |
+| `APP_PRIVATE_KEY` | Full PEM content of the private key from Step 1 |
 
 > Do not add `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` — OIDC is used instead.
 
@@ -479,40 +210,82 @@ Dependabot (for GitHub Actions version updates) is built into GitHub and require
 
 ---
 
-## ✅ What happens automatically after you push to main
+## ✅ What happens automatically after you push to `main`
 
-There are two pipelines. Which ones run depends on what files you change:
+### `deploy-terraform.yaml` — triggered by changes to `terraform/**`
 
-**`deploy-terraform.yaml`** — runs when `terraform/**` changes:
-1. Authenticates to AWS via OIDC (using `AWS_IAM_ROLE_ARN` from Step 2)
-2. Runs `terraform init` and `terraform plan`
-3. Applies the plan — provisions EKS, VPC, IAM roles, Secrets Manager secret, ESO, SecretStore, ExternalSecret
-4. Prints outputs (cluster name, role ARN, region) to use as GitHub Actions secrets
+Runs `terraform init → validate → plan → apply` and prints outputs. Provisions:
 
-**`deploy-arc.yaml`** — runs when `arc-system/**`, `versions.env`, `install.sh`, or the workflow file changes:
-1. Checks out the repo
-2. Loads the pinned chart version from `versions.env`
-3. Authenticates to AWS via OIDC (using `AWS_IAM_ROLE_ARN` from Step 2)
-4. Configures kubectl against your EKS cluster
-5. Applies RBAC (`arc-system/rbac.yaml`)
-6. Applies NetworkPolicies (`arc-system/network-policy.yaml`)
-7. Installs the ARC controller via Helm
-8. Installs the runner scale set via Helm
-9. Verifies the rollout (dynamically discovers the controller deployment name)
+| Resource | Details |
+|----------|---------|
+| VPC | `10.0.0.0/16`, 2 AZs (`eu-central-1a/b`), 2 private + 2 public subnets, single NAT gateway |
+| EKS cluster | Kubernetes 1.35, public + private endpoint, IRSA enabled |
+| EKS add-ons | `vpc-cni`, `kube-proxy` (with cluster), `coredns` (after node group) |
+| Managed node group | `t3.medium`, min 1 / max 3 / desired 2, private subnets |
+| IAM role | `ESO-ARC-Role` — IRSA role for ESO to read Secrets Manager |
+| Secrets Manager | `arc/github-app-secret` — stores `github_app_id`, `github_app_installation_id`, `github_app_private_key` |
+| ESO | External Secrets Operator installed via Helm in `external-secrets` namespace |
+| `arc-runners` namespace | Created by Terraform before any resources target it |
+| ESO ServiceAccount | `external-secrets` SA in `arc-runners` with IRSA annotation |
+| SecretStore | `aws-secret-store` in `arc-runners` — connects ESO to Secrets Manager via IRSA |
+| ExternalSecret | `arc-github-app-secret` in `arc-runners` — syncs the GitHub App credentials into a K8s secret every 1h |
 
-**Version updates are also automated:**
-- Renovate opens a PR when a new ARC chart version is released → merge the PR → pipeline deploys the new version
-- Dependabot opens weekly PRs for GitHub Actions version bumps in workflow files
+The pipeline can also be triggered manually via **workflow_dispatch** with `action: destroy` to tear everything down.
+
+### `deploy-arc.yaml` — triggered by changes to `arc-system/**`, `versions.env`, `install.sh`
+
+Deploys ARC onto the cluster that Terraform provisioned:
+
+1. Loads pinned chart version from `versions.env` (currently `0.9.3`)
+2. Authenticates to AWS via OIDC
+3. Configures kubectl against the EKS cluster
+4. Applies RBAC (`arc-system/rbac.yaml`)
+5. Applies NetworkPolicies (`arc-system/network-policy.yaml`)
+6. `helm upgrade --install arc` — ARC controller in `arc-system`
+7. `helm upgrade --install arc-runner-set` — runner scale set in `arc-runners`
+8. Verifies rollout (dynamically discovers the controller deployment name)
+
+The pipeline also supports `action: destroy` via workflow_dispatch to uninstall Helm releases and delete namespaces.
+
+### Version updates are automated
+
+- **Renovate** opens a PR when a new ARC chart version is released → merge → `deploy-arc.yaml` deploys it
+- **Dependabot** opens weekly PRs for GitHub Actions version bumps in workflow files
+
+---
+
+## What Terraform creates end-to-end
+
+```
+module.vpc
+  └── module.eks  (cluster + vpc-cni + kube-proxy add-ons)
+        └── module.node_group  (t3.medium nodes — wait for CNI add-on first)
+              └── aws_eks_addon.coredns  (needs nodes to schedule pods)
+                    └── helm_release.eso  (External Secrets Operator)
+                          └── time_sleep.wait_for_eso_crds  (30s for CRD registration)
+                                └── kubectl_manifest.arc_runners_namespace
+                                      └── kubectl_manifest.eso_service_account  (IRSA SA in arc-runners)
+                                            └── kubectl_manifest.secret_store
+                                                  └── kubectl_manifest.external_secret
+```
+
+Key design decisions:
+- `vpc-cni` and `kube-proxy` are included in the EKS module — they go Active without nodes
+- `coredns` is a separate `aws_eks_addon` with `depends_on = [module.node_group]` — it needs nodes to schedule pods
+- ESO CRDs take ~30s to register after the Helm release completes — `time_sleep` handles this
+- The `arc-runners` namespace is created by Terraform before the SecretStore and ExternalSecret target it
+- The ESO ServiceAccount is created in `arc-runners` (not `external-secrets`) with the IRSA annotation — required because a namespace-scoped SecretStore cannot reference a ServiceAccount in a different namespace
 
 ---
 
 ## Verify installation
 
 ```bash
-kubectl get pods -n arc-system                        # controller
-kubectl get autoscalingrunnerset -n arc-runners       # scale set
+kubectl get pods -n arc-system                        # ARC controller
+kubectl get autoscalingrunnerset -n arc-runners       # runner scale set
 kubectl get pods -n arc-runners                       # runner pods (appear when jobs queue)
-kubectl get servicemonitor -n arc-system              # Prometheus monitors
+kubectl get externalsecret arc-github-app-secret -n arc-runners   # ESO sync status
+kubectl get secret arc-github-app-secret -n arc-runners           # synced K8s secret
 kubectl get networkpolicy -n arc-runners              # network policies
 kubectl get rolebinding -n arc-runners                # RBAC
 ```
@@ -522,10 +295,11 @@ kubectl get rolebinding -n arc-runners                # RBAC
 ## Architecture overview
 
 ```
-arc-runner-controller repo          CI/CD Cluster (EKS)
-─────────────────────────           ───────────────────────────
-deploy-arc.yaml          ────────►  arc-system  (controller)
-arc-system/values        ────────►  arc-runners (runners)
+arc-runner-controller repo          CI/CD Cluster (EKS, eu-central-1)
+─────────────────────────           ──────────────────────────────────
+deploy-terraform.yaml    ────────►  VPC + EKS + IAM + Secrets Manager + ESO
+deploy-arc.yaml          ────────►  arc-system  (ARC controller)
+arc-system/values        ────────►  arc-runners (runner scale set)
                                             │
                                             │ runners execute jobs
                                             ▼
@@ -601,7 +375,7 @@ Required secrets in your app repo:
 
 | Secret | Description |
 |--------|-------------|
-| `AWS_IAM_ROLE_ARN` | IAM role with access to the **production** EKS cluster (different from the CI role) |
+| `AWS_IAM_ROLE_ARN` | IAM role with access to the production EKS cluster (different from the CI role) |
 | `AWS_REGION` | e.g. `eu-central-1` |
 | `PROD_EKS_CLUSTER_NAME` | Your production cluster name |
 
@@ -654,7 +428,7 @@ Runner pods use a dedicated least-privilege ServiceAccount (`arc-runner-sa`) def
 
 ## Observability
 
-`arc-system/service-monitor.yaml` defines two Prometheus ServiceMonitors:
+`arc-system/service-monitor.yaml` defines two Prometheus ServiceMonitors (disabled in the pipeline by default — uncomment the step to enable):
 
 | Monitor | Namespace | What it scrapes |
 |---------|-----------|-----------------|
@@ -671,6 +445,29 @@ Requires [kube-prometheus-stack](https://github.com/prometheus-community/helm-ch
 
 ---
 
+## Secret flow
+
+```
+GitHub Actions secrets (APP_ID, APP_INSTALLATION_ID, APP_PRIVATE_KEY)
+        │  (via TF_VAR_* env vars in deploy-terraform.yaml)
+        ▼
+terraform apply
+        │
+        ├── aws_secretsmanager_secret  →  arc/github-app-secret  (Secrets Manager)
+        ├── aws_iam_role.eso           →  ESO-ARC-Role  (IRSA)
+        ├── helm_release.eso           →  External Secrets Operator
+        ├── kubectl_manifest.secret_store   →  SecretStore (arc-runners)
+        └── kubectl_manifest.external_secret → ExternalSecret (arc-runners)
+                                                        │  (synced every 1h)
+                                                        ▼
+                                              arc-github-app-secret  (K8s Secret)
+                                                        │
+                                                        ▼
+                                              ARC controller reads it
+```
+
+---
+
 ## .gitignore
 
 | Pattern | What it blocks |
@@ -678,20 +475,16 @@ Requires [kube-prometheus-stack](https://github.com/prometheus-community/helm-ch
 | `*.pem` | GitHub App private key files |
 | `*.key` | Any raw key files |
 | `.env` | Local environment variable files |
+| `terraform.tfvars` | Terraform variable values |
 | `arc-system/github-app-secret.yaml` | Plain (unencrypted) secret manifests |
 
 ---
 
 ## Local bootstrap (alternative to the pipeline)
 
-`install.sh` is a local-only script. It is **not called by the pipeline** — `deploy-arc.yaml` runs its own Helm and kubectl commands directly.
+`install.sh` performs the same Helm installs as `deploy-arc.yaml` but runs locally. Use it when you want to bootstrap ARC without pushing to `main`, or when the cluster is not yet reachable by GitHub Actions.
 
-Run `install.sh` manually from your machine **instead of** pushing to `main`, for example when:
-- You want to bootstrap ARC on a cluster that is not yet reachable by GitHub Actions
-- You are testing locally before setting up the pipeline
-- You do not want to use the GitOps pipeline at all
-
-Run it after completing Steps 1–4 (GitHub App, OIDC, secrets, etc.) with your kubeconfig pointing at the target cluster:
+Run it after Terraform has provisioned the cluster, with your kubeconfig pointing at the target cluster:
 
 ```bash
 export GITHUB_APP_ID=<app-id>
@@ -704,13 +497,29 @@ chmod +x install.sh
 
 ---
 
+## Uninstall
+
+**Destroy ARC only** (via pipeline workflow_dispatch, `action: destroy`):
+- Uninstalls `arc-runner-set` and `arc` Helm releases
+- Deletes `arc-runners` and `arc-system` namespaces
+
+**Destroy all infrastructure** (via pipeline workflow_dispatch on `deploy-terraform.yaml`, `action: destroy`):
+- Runs `terraform destroy` — removes EKS, VPC, IAM roles, Secrets Manager secret, ESO
+
+> If a Terraform apply partially fails, orphaned resources may exist in AWS but not in Terraform state. In that case, a full `destroy` + `apply` is the cleanest recovery path.
+
+---
+
 ## Troubleshooting
 
 **Controller pod is CrashLoopBackOff**
 ```bash
 kubectl logs -n arc-system -l app.kubernetes.io/name=gha-runner-scale-set-controller
 ```
-Most common cause: `arc-github-app-secret` is missing or in the wrong namespace.
+Most common cause: `arc-github-app-secret` is missing or in the wrong namespace. Check ESO sync status:
+```bash
+kubectl get externalsecret arc-github-app-secret -n arc-runners
+```
 
 **Runners not picking up jobs**
 ```bash
@@ -728,19 +537,42 @@ kubectl rollout restart daemonset/aws-node -n kube-system
 kubectl delete ephemeralrunner --all -n arc-runners
 ```
 
+**Terraform: "Addon already exists" or "cannot re-use a name that is still in use"**
+
+This happens when a previous apply partially succeeded — the resource was created in AWS/Kubernetes but Terraform errored before recording it in state. Options:
+- Use a Terraform `import` block to adopt the existing resource
+- Or destroy everything and apply fresh (faster when multiple resources are orphaned)
+
 **ESO SecretStore: "ServiceAccount not found"**
 
 The SecretStore references a service account for IRSA auth. This SA must exist in the **same namespace** as the SecretStore (namespace-scoped). The ESO Helm chart creates its SA in the `external-secrets` namespace, not `arc-runners`. Terraform creates a dedicated SA with the IRSA annotation in `arc-runners` to solve this.
 
-**Secret not found**
+**ESO SecretStore: "resource is not valid for cluster"**
+
+Two possible causes:
+1. CRDs not ready yet — `time_sleep` (30s) handles this, but on slow clusters increase the duration in `eso.tf`
+2. Wrong API version — the manifests use `external-secrets.io/v1` (not `v1beta1`)
+
+**ESO SecretStore: "namespace not found"**
+
+The `arc-runners` namespace must exist before the SecretStore can be created in it. Terraform must create the namespace explicitly before applying the SecretStore manifest.
+
+**Node group CREATE_FAILED: unhealthy nodes**
+
+Missing `vpc-cni` add-on. Nodes register but CNI never initializes → `NotReady`. Confirmed by:
 ```bash
-kubectl get secret arc-github-app-secret -n arc-runners
+kubectl get pods -n kube-system   # empty
+aws eks list-addons --cluster-name arc-ci-cluster   # empty array
 ```
-The secret must be in `arc-runners`, not `arc-system`.
+The EKS module in this repo includes `vpc-cni` and `kube-proxy` in `addons {}` to prevent this.
+
+**CoreDNS stuck in Degraded**
+
+CoreDNS requires nodes to schedule its pods. If installed at the same time as the node group, it will stay `Degraded` until the 20-minute Terraform timeout, then fail. Solution: install CoreDNS as a separate `aws_eks_addon` resource with `depends_on` pointing to the node group.
 
 **EKS console shows "No Nodes" or kubectl returns "provide credentials"**
 
-EKS has its own access control separate from IAM. Even the root account needs an explicit access entry to view cluster resources. Terraform manages this via `access_entries` in the EKS module, but if you destroy and recreate the cluster manually, you need to re-add them:
+EKS access entries are managed in the EKS module via `access_entries`. If you recreate the cluster manually:
 ```bash
 aws eks create-access-entry --cluster-name arc-ci-cluster \
   --principal-arn arn:aws:iam::<ACCOUNT_ID>:root --region eu-central-1
@@ -749,7 +581,6 @@ aws eks associate-access-policy --cluster-name arc-ci-cluster \
   --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
   --access-scope type=cluster --region eu-central-1
 ```
-
 **Node group CREATE_FAILED: Unhealthy nodes in the kubernetes cluster**
 
 This is almost always caused by missing EKS add-ons. The EKS Terraform module (`terraform-aws-modules/eks/aws` ~> 21.x) does **not** install add-ons by default. Without `vpc-cni`, nodes register but the CNI never initializes → `NetworkReady=false` → nodes stay `NotReady` → EKS reports "unhealthy" after a 33-minute timeout.
@@ -772,26 +603,6 @@ addons = {
 
 CoreDNS must be installed **after** the node group (it needs nodes to schedule pods on). See the Terraform deployment order section below.
 
-**CoreDNS stuck in Degraded state**
-
-CoreDNS requires nodes to schedule its pods. If installed at the same time as the node group, it will stay `Degraded` until the 20-minute Terraform timeout, then fail. Solution: install CoreDNS as a separate `aws_eks_addon` resource with `depends_on` pointing to the node group.
-
-**Terraform: "Addon already exists" or "cannot re-use a name that is still in use"**
-
-This happens when a previous apply partially succeeded — the resource was created in AWS/Kubernetes but Terraform errored before recording it in state. Options:
-- Use a Terraform `import` block to adopt the existing resource
-- Or destroy everything and apply fresh (faster when multiple resources are orphaned)
-
-**ESO SecretStore: "resource is not valid for cluster"**
-
-Two possible causes:
-1. The ESO CRDs haven't finished registering yet — add a `time_sleep` (30s) between the ESO Helm release and the SecretStore resource
-2. The API version is wrong — latest ESO uses `external-secrets.io/v1`, not `v1beta1`
-
-**ESO SecretStore: "namespace not found"**
-
-The `arc-runners` namespace must exist before the SecretStore can be created in it. Terraform must create the namespace explicitly before applying the SecretStore manifest.
-
 **NetworkPolicy blocking runner traffic**
 ```bash
 kubectl describe networkpolicy -n arc-runners
@@ -811,6 +622,7 @@ kubectl get servicemonitor -n arc-system -o yaml
 Ensure the `release: prometheus` label matches your Prometheus Operator's `serviceMonitorSelector`.
 
 ---
+
 
 ## Terraform deployment order
 
@@ -853,22 +665,3 @@ Key points:
 - The ESO service account must be created in `arc-runners` (where the SecretStore lives) with the IRSA annotation — the Helm-installed SA lives in `external-secrets` and can't be referenced cross-namespace by a namespace-scoped SecretStore
 
 ---
-
-## Uninstall
-
-**If using Terraform (Option D):**
-
-Run the `deploy-terraform.yaml` pipeline with the `destroy` action via workflow dispatch. This tears down everything in the correct order.
-
-**If using manual setup (Options A/B/C):**
-
-```bash
-helm uninstall arc-runner-set -n arc-runners
-helm uninstall arc -n arc-system
-kubectl delete -f arc-system/rbac.yaml
-kubectl delete -f arc-system/network-policy.yaml
-kubectl delete -f arc-system/service-monitor.yaml
-kubectl delete namespace arc-runners arc-system
-```
-
-> **Note:** If a Terraform apply partially fails, you may end up with orphaned resources (created in AWS but not tracked in Terraform state). In that case, a full `destroy` + `apply` is the cleanest recovery path rather than trying to import each orphaned resource individually.
