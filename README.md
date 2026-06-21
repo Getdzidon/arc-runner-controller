@@ -499,12 +499,12 @@ chmod +x install.sh
 
 ## Uninstall
 
-**Destroy ARC only** (via pipeline workflow_dispatch, `action: destroy`):
+➡️ **Destroy ARC only** (via pipeline workflow_dispatch, `action: destroy`):
 - Uninstalls `arc-runner-set` and `arc` Helm releases
-- Deletes `arc-runners` and `arc-system` namespaces
+- Deletes `arc-runners` and `arc-system` namespaces  
 
 
-**Destroy all infrastructure** (via pipeline workflow_dispatch on `deploy-terraform.yaml`, `action: destroy`):
+➡️ **Destroy all infrastructure** (via pipeline workflow_dispatch on `deploy-terraform.yaml`, `action: destroy`):
 - Runs `terraform destroy` — removes EKS, VPC, IAM roles, Secrets Manager secret, ESO
 
 > If a Terraform apply partially fails, orphaned resources may exist in AWS but not in Terraform state. In that case, a full `destroy` + `apply` is the cleanest recovery path.
@@ -520,15 +520,14 @@ kubectl logs -n arc-system -l app.kubernetes.io/name=gha-runner-scale-set-contro
 Most common cause: `arc-github-app-secret` is missing or in the wrong namespace. Check ESO sync status:
 ```bash
 kubectl get externalsecret arc-github-app-secret -n arc-runners
-```
---
+```  
 
 
 ➡️ **Runners not picking up jobs**
 ```bash
 kubectl logs -n arc-runners -l app.kubernetes.io/name=arc-runner-set
 ```
-Check that `githubConfigUrl` points to a specific **repository** (e.g. `https://github.com/user/repo`), not a user account URL. GitHub's runner registration API returns 404 for user-level URLs.
+Check that `githubConfigUrl` points to a specific **repository** (e.g. `https://github.com/user/repo`), not a user account URL. GitHub's runner registration API returns 404 for user-level URLs.  
 
 
 
@@ -539,7 +538,7 @@ kubectl get events -n arc-runners --field-selector reason=FailedCreatePodSandBox
 If you see `failed to assign an IP address to container`, the vpc-cni has exhausted available IPs. This can happen after crash loops leave stale ENI allocations. Fix: restart the vpc-cni daemonset:
 ```bash
 kubectl rollout restart daemonset/aws-node -n kube-system
-kubectl delete ephemeralrunner --all -n arc-runners
+kubectl delete ephemeralrunner --all -n arc-runners  
 ```
 
 
@@ -548,13 +547,13 @@ kubectl delete ephemeralrunner --all -n arc-runners
 
 This happens when a previous apply partially succeeded — the resource was created in AWS/Kubernetes but Terraform errored before recording it in state. Options:
 - Use a Terraform `import` block to adopt the existing resource
-- Or destroy everything and apply fresh (faster when multiple resources are orphaned)
+- Or destroy everything and apply fresh (faster when multiple resources are orphaned)  
 
 
 
 ➡️ **ESO SecretStore: "ServiceAccount not found"**
 
-The SecretStore references a service account for IRSA auth. This SA must exist in the **same namespace** as the SecretStore (namespace-scoped). The ESO Helm chart creates its SA in the `external-secrets` namespace, not `arc-runners`. Terraform creates a dedicated SA with the IRSA annotation in `arc-runners` to solve this.
+The SecretStore references a service account for IRSA auth. This SA must exist in the **same namespace** as the SecretStore (namespace-scoped). The ESO Helm chart creates its SA in the `external-secrets` namespace, not `arc-runners`. Terraform creates a dedicated SA with the IRSA annotation in `arc-runners` to solve this.  
 
 
 
@@ -562,13 +561,13 @@ The SecretStore references a service account for IRSA auth. This SA must exist i
 
 Two possible causes:
 1. CRDs not ready yet — `time_sleep` (30s) handles this, but on slow clusters increase the duration in `eso.tf`
-2. Wrong API version — the manifests use `external-secrets.io/v1` (not `v1beta1`)
+2. Wrong API version — the manifests use `external-secrets.io/v1` (not `v1beta1`)  
 
 
 
 ➡️ **ESO SecretStore: "namespace not found"**
 
-The `arc-runners` namespace must exist before the SecretStore can be created in it. Terraform must create the namespace explicitly before applying the SecretStore manifest.
+The `arc-runners` namespace must exist before the SecretStore can be created in it. Terraform must create the namespace explicitly before applying the SecretStore manifest.  
 
 
 
@@ -579,13 +578,13 @@ Missing `vpc-cni` add-on. Nodes register but CNI never initializes → `NotReady
 kubectl get pods -n kube-system   # empty
 aws eks list-addons --cluster-name arc-ci-cluster   # empty array
 ```
-The EKS module in this repo includes `vpc-cni` and `kube-proxy` in `addons {}` to prevent this.
+The EKS module in this repo includes `vpc-cni` and `kube-proxy` in `addons {}` to prevent this.  
 
 
 
 ➡️ **CoreDNS stuck in Degraded**
 
-CoreDNS requires nodes to schedule its pods. If installed at the same time as the node group, it will stay `Degraded` until the 20-minute Terraform timeout, then fail. Solution: install CoreDNS as a separate `aws_eks_addon` resource with `depends_on` pointing to the node group.
+CoreDNS requires nodes to schedule its pods. If installed at the same time as the node group, it will stay `Degraded` until the 20-minute Terraform timeout, then fail. Solution: install CoreDNS as a separate `aws_eks_addon` resource with `depends_on` pointing to the node group.  
 
 
 
@@ -599,7 +598,7 @@ aws eks associate-access-policy --cluster-name arc-ci-cluster \
   --principal-arn arn:aws:iam::<ACCOUNT_ID>:root \
   --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
   --access-scope type=cluster --region eu-central-1
-```
+```  
 
 
 ➡️ **Node group CREATE_FAILED: Unhealthy nodes in the kubernetes cluster**
@@ -622,7 +621,7 @@ addons = {
 }
 ```
 
-CoreDNS must be installed **after** the node group (it needs nodes to schedule pods on). See the Terraform deployment order section below.
+CoreDNS must be installed **after** the node group (it needs nodes to schedule pods on). See the Terraform deployment order section below.  
 
 
 
@@ -630,7 +629,7 @@ CoreDNS must be installed **after** the node group (it needs nodes to schedule p
 ```bash
 kubectl describe networkpolicy -n arc-runners
 ```
-Ensure the `arc-system` namespace has the label `kubernetes.io/metadata.name=arc-system`.
+Ensure the `arc-system` namespace has the label `kubernetes.io/metadata.name=arc-system`.  
 
 
 
@@ -638,7 +637,7 @@ Ensure the `arc-system` namespace has the label `kubernetes.io/metadata.name=arc
 ```bash
 helm registry login ghcr.io -u <github-username> --password-stdin <<< <github-pat>
 ```
-Requires a GitHub PAT with `read:packages` scope.
+Requires a GitHub PAT with `read:packages` scope.  
 
 
 
@@ -648,7 +647,7 @@ kubectl get servicemonitor -n arc-system -o yaml
 ```
 Ensure the `release: prometheus` label matches your Prometheus Operator's `serviceMonitorSelector`.
 
----
+---  
 
 
 ## Terraform deployment order
@@ -681,7 +680,7 @@ kubectl_manifest.secret_store
         │
         ▼
 kubectl_manifest.external_secret
-```
+```  
 
 Key points:
 - `vpc-cni` and `kube-proxy` go Active without nodes — safe to include in the EKS module
