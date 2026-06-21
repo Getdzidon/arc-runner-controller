@@ -503,6 +503,7 @@ chmod +x install.sh
 - Uninstalls `arc-runner-set` and `arc` Helm releases
 - Deletes `arc-runners` and `arc-system` namespaces
 
+
 **Destroy all infrastructure** (via pipeline workflow_dispatch on `deploy-terraform.yaml`, `action: destroy`):
 - Runs `terraform destroy` — removes EKS, VPC, IAM roles, Secrets Manager secret, ESO
 
@@ -521,11 +522,15 @@ Most common cause: `arc-github-app-secret` is missing or in the wrong namespace.
 kubectl get externalsecret arc-github-app-secret -n arc-runners
 ```
 
+
+
 **Runners not picking up jobs**
 ```bash
 kubectl logs -n arc-runners -l app.kubernetes.io/name=arc-runner-set
 ```
 Check that `githubConfigUrl` points to a specific **repository** (e.g. `https://github.com/user/repo`), not a user account URL. GitHub's runner registration API returns 404 for user-level URLs.
+
+
 
 **Runner pods stuck in Pending or CrashLoopBackOff with IP errors**
 ```bash
@@ -537,15 +542,21 @@ kubectl rollout restart daemonset/aws-node -n kube-system
 kubectl delete ephemeralrunner --all -n arc-runners
 ```
 
+
+
 **Terraform: "Addon already exists" or "cannot re-use a name that is still in use"**
 
 This happens when a previous apply partially succeeded — the resource was created in AWS/Kubernetes but Terraform errored before recording it in state. Options:
 - Use a Terraform `import` block to adopt the existing resource
 - Or destroy everything and apply fresh (faster when multiple resources are orphaned)
 
+
+
 **ESO SecretStore: "ServiceAccount not found"**
 
 The SecretStore references a service account for IRSA auth. This SA must exist in the **same namespace** as the SecretStore (namespace-scoped). The ESO Helm chart creates its SA in the `external-secrets` namespace, not `arc-runners`. Terraform creates a dedicated SA with the IRSA annotation in `arc-runners` to solve this.
+
+
 
 **ESO SecretStore: "resource is not valid for cluster"**
 
@@ -553,9 +564,13 @@ Two possible causes:
 1. CRDs not ready yet — `time_sleep` (30s) handles this, but on slow clusters increase the duration in `eso.tf`
 2. Wrong API version — the manifests use `external-secrets.io/v1` (not `v1beta1`)
 
+
+
 **ESO SecretStore: "namespace not found"**
 
 The `arc-runners` namespace must exist before the SecretStore can be created in it. Terraform must create the namespace explicitly before applying the SecretStore manifest.
+
+
 
 **Node group CREATE_FAILED: unhealthy nodes**
 
@@ -566,9 +581,13 @@ aws eks list-addons --cluster-name arc-ci-cluster   # empty array
 ```
 The EKS module in this repo includes `vpc-cni` and `kube-proxy` in `addons {}` to prevent this.
 
+
+
 **CoreDNS stuck in Degraded**
 
 CoreDNS requires nodes to schedule its pods. If installed at the same time as the node group, it will stay `Degraded` until the 20-minute Terraform timeout, then fail. Solution: install CoreDNS as a separate `aws_eks_addon` resource with `depends_on` pointing to the node group.
+
+
 
 **EKS console shows "No Nodes" or kubectl returns "provide credentials"**
 
@@ -581,6 +600,8 @@ aws eks associate-access-policy --cluster-name arc-ci-cluster \
   --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
   --access-scope type=cluster --region eu-central-1
 ```
+
+
 **Node group CREATE_FAILED: Unhealthy nodes in the kubernetes cluster**
 
 This is almost always caused by missing EKS add-ons. The EKS Terraform module (`terraform-aws-modules/eks/aws` ~> 21.x) does **not** install add-ons by default. Without `vpc-cni`, nodes register but the CNI never initializes → `NetworkReady=false` → nodes stay `NotReady` → EKS reports "unhealthy" after a 33-minute timeout.
@@ -603,17 +624,23 @@ addons = {
 
 CoreDNS must be installed **after** the node group (it needs nodes to schedule pods on). See the Terraform deployment order section below.
 
+
+
 **NetworkPolicy blocking runner traffic**
 ```bash
 kubectl describe networkpolicy -n arc-runners
 ```
 Ensure the `arc-system` namespace has the label `kubernetes.io/metadata.name=arc-system`.
 
+
+
 **Helm OCI pull fails**
 ```bash
 helm registry login ghcr.io -u <github-username> --password-stdin <<< <github-pat>
 ```
 Requires a GitHub PAT with `read:packages` scope.
+
+
 
 **ServiceMonitor not scraping**
 ```bash
