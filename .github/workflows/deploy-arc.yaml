@@ -41,7 +41,7 @@ jobs:
           echo "ARC_CHART_VERSION=${ARC_CHART_VERSION}" >> "$GITHUB_ENV"
 
       - name: Configure kubectl
-        uses: azure/setup-kubectl@v4
+        uses: azure/setup-kubectl@v5
         with:
           version: "v1.32.0"
 
@@ -105,7 +105,7 @@ jobs:
 
     steps:
       - name: Configure kubectl
-        uses: azure/setup-kubectl@v4
+        uses: azure/setup-kubectl@v5
         with:
           version: "v1.32.0"
 
